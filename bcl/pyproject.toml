@@ -1,0 +1,134 @@
+[project]
+name = "bcl"
+version = "0.1.0"
+description = "IntelliAI 2.0 — Business Control Layer for IBM MQ migration. Team intelliAI2DotO, Wells Fargo Hackathon 2026 Phase 2."
+requires-python = ">=3.12,<3.13"
+authors = [{ name = "intelliAI2DotO" }]
+readme = "README.md"
+
+dependencies = [
+    # Web framework
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.5.0",
+
+    # Database (SQLite + async)
+    "sqlalchemy>=2.0.35",
+    "alembic>=1.13.0",
+    "aiosqlite>=0.20.0",
+    "greenlet>=3.0.0",                # required by SQLAlchemy async
+
+    # Kubernetes / OpenShift
+    "kubernetes>=31.0.0",
+    "openshift-client>=2.0.4",        # for Routes
+
+    # MQ admin REST client (read paths only; primary path is kubectl exec + runmqsc)
+    "httpx>=0.27.0",
+
+    # LLM provider abstraction
+    "groq>=0.11.0",                   # local dev
+    "langchain-core>=0.3.0",          # for Tachyon swap-in
+    # Tachyon-specific package added in office laptop; not pinned here
+
+    # Observability
+    "structlog>=24.4.0",
+    "prometheus-client>=0.21.0",
+    "opentelemetry-api>=1.27.0",
+    "opentelemetry-sdk>=1.27.0",
+    "opentelemetry-instrumentation-fastapi>=0.48b0",
+    "opentelemetry-exporter-otlp>=1.27.0",
+
+    # Utilities
+    "python-multipart>=0.0.12",       # for FastAPI form/file uploads (evidence)
+    "pyyaml>=6.0.2",                  # MQ image YAML rendering
+    "jinja2>=3.1.4",                  # MQSC template rendering
+    "tenacity>=9.0.0",                # retry-with-backoff for K8s/MQ calls
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=5.0.0",
+    "httpx>=0.27.0",
+    "ruff>=0.6.0",
+    "mypy>=1.11.0",
+    "types-pyyaml",
+    "freezegun>=1.5.0",               # for testing Lamport ordering
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+bcl = ["py.typed"]
+
+# ─────────────────────────────────────────────────────────────────────
+# Lint / format
+# ─────────────────────────────────────────────────────────────────────
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",   # pyflakes/pycodestyle
+    "I",             # isort
+    "B",             # bugbear
+    "UP",            # pyupgrade
+    "ASYNC",         # async correctness
+    "S",             # bandit (security)
+    "RUF",
+]
+ignore = [
+    "S101",   # asserts ok in tests
+    "E501",   # line length handled by formatter
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "B"]
+"alembic/**" = ["E", "F"]
+
+# ─────────────────────────────────────────────────────────────────────
+# Type checking
+# ─────────────────────────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+# ─────────────────────────────────────────────────────────────────────
+# CI lint gate — enforce "no direct MQ calls outside bcl.mq"
+# ─────────────────────────────────────────────────────────────────────
+# This is the BCL-as-system-of-record moat. CI greps the codebase for
+# pymqi, runmqsc, MQRC outside src/bcl/mq/ — build fails if found.
+# Implemented in scripts/ci_lint_no_direct_mq.sh, not here.
+
+# ─────────────────────────────────────────────────────────────────────
+# Test config
+# ─────────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+]
+markers = [
+    "integration: requires Postgres or live OCP",
+    "slow: takes more than 1s",
+]
