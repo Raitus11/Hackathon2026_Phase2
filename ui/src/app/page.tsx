@@ -1,6 +1,7 @@
 "use client";
 
 import useSWR from "swr";
+import Link from "next/link";
 import { bcl } from "@/lib/bcl-client";
 
 export default function Dashboard() {
@@ -110,6 +111,69 @@ export default function Dashboard() {
           value={0}
           sub="none running"
         />
+      </section>
+
+      {/* Topologies list */}
+      <section className="mb-4">
+        <div className="panel">
+          <div className="flex items-center justify-between border-b border-border-subtle px-4 py-3">
+            <div>
+              <h2 className="text-sm font-medium">Topologies</h2>
+              <p className="mt-0.5 text-xs text-fg-muted">
+                Click to inspect, provision, or tear down.
+              </p>
+            </div>
+          </div>
+          {topologies && topologies.length > 0 ? (
+            <div className="divide-y divide-border-subtle">
+              {topologies.map((t) => (
+                <Link
+                  key={t.id}
+                  href={`/topology/${t.id}`}
+                  className="grid grid-cols-12 items-center gap-3 px-4 py-3 text-xs transition-colors hover:bg-bg-subtle"
+                >
+                  <span className="col-span-1 font-mono text-fg-subtle">
+                    #{t.id}
+                  </span>
+                  <span className="col-span-5 truncate font-medium text-fg">
+                    {t.name}
+                  </span>
+                  <span className="col-span-2">
+                    <span
+                      className={`pill ${
+                        t.kind === "SOURCE" ? "text-fg-muted" : "text-accent"
+                      }`}
+                    >
+                      {t.kind.toLowerCase()}
+                    </span>
+                  </span>
+                  <span className="col-span-2 font-mono text-fg-muted">
+                    {t.queue_managers.length} QM
+                    {t.queue_managers.length === 1 ? "" : "s"}
+                  </span>
+                  <span className="col-span-2 text-right text-fg-subtle">
+                    →
+                  </span>
+                </Link>
+              ))}
+            </div>
+          ) : (
+            <div className="px-4 py-12 text-center">
+              <p className="text-sm text-fg-muted">No topologies yet.</p>
+              <p className="mt-1 text-xs text-fg-subtle">
+                POST one via{" "}
+                <a
+                  href="http://localhost:8080/docs"
+                  target="_blank"
+                  className="text-accent underline-offset-2 hover:underline"
+                >
+                  Swagger UI
+                </a>
+                .
+              </p>
+            </div>
+          )}
+        </div>
       </section>
 
       {/* Two-column layout: audit feed + system info */}
