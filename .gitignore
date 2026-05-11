@@ -37,7 +37,7 @@ npm-debug.log*
 Thumbs.db
 
 # Project-specific
-/bcl/local-data/
+**/local-data/
 /bcl/.audit-cache/
 /bcl/evidence-bundles/
 *.sqlite
