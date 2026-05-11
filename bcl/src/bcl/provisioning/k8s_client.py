@@ -1,6 +1,6 @@
 """Kubernetes client — subprocess wrapper around `oc` / `kubectl`.
 
-Marcus's reasoning for subprocess vs the official kubernetes-client library:
+Reasoning for subprocess vs the official kubernetes-client library:
 1. Audit-log entries can show the literal command an operator would have
    typed at a terminal — judges see something they recognize.
 2. We inherit operator-parity in failure modes: same RBAC denies, same
@@ -127,7 +127,19 @@ class K8sClient:
         stdin: str | None = None,
         timeout: float | None = None,
     ) -> K8sResult:
-        """Execute the binary with `args`. Optionally pipe `stdin` text in."""
+        """Execute the binary with `args`. Optionally pipe `stdin` text in.
+
+        Cross-platform note: we use synchronous subprocess.run inside an
+        asyncio executor instead of asyncio.create_subprocess_exec.
+
+        Background: asyncio.create_subprocess_exec requires a ProactorEventLoop
+        on Windows, but uvicorn / FastAPI default to the SelectorEventLoop on
+        Windows, which raises NotImplementedError when subprocesses are
+        attempted. Running subprocess.run in a thread via loop.run_in_executor
+        avoids the issue entirely — works identically on Windows, macOS, Linux.
+        """
+        import subprocess
+
         cmd = [self.binary, *args]
         eff_timeout = timeout if timeout is not None else self.default_timeout_seconds
 
@@ -135,46 +147,36 @@ class K8sClient:
         loop = asyncio.get_running_loop()
         t0 = loop.time()
 
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdin=asyncio.subprocess.PIPE if stdin is not None else None,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdin_bytes = stdin.encode("utf-8") if stdin is not None else None
+        def _do_subprocess() -> tuple[int, str, str]:
+            """Synchronous subprocess invocation; runs in a thread pool."""
             try:
-                stdout_b, stderr_b = await asyncio.wait_for(
-                    proc.communicate(input=stdin_bytes), timeout=eff_timeout
+                proc = subprocess.run(
+                    cmd,
+                    input=stdin if stdin is not None else None,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=eff_timeout,
+                    check=False,
                 )
-            except asyncio.TimeoutError:
-                # Kill the runaway process so we don't leak it
-                proc.kill()
-                await proc.wait()
-                duration = loop.time() - t0
-                return K8sResult(
-                    command=cmd,
-                    exit_code=-1,
-                    stdout="",
-                    stderr=f"timed out after {eff_timeout}s",
-                    duration_seconds=duration,
-                )
-        except FileNotFoundError as e:
-            duration = loop.time() - t0
-            return K8sResult(
-                command=cmd,
-                exit_code=-1,
-                stdout="",
-                stderr=f"binary not found: {e}",
-                duration_seconds=duration,
-            )
+                return (proc.returncode, proc.stdout, proc.stderr)
+            except subprocess.TimeoutExpired:
+                return (-1, "", f"timed out after {eff_timeout}s")
+            except FileNotFoundError as e:
+                return (-1, "", f"binary not found: {e}")
+            except OSError as e:
+                # E.g. permission denied, executable bit missing
+                return (-1, "", f"OS error: {e}")
 
+        rc, out, err = await loop.run_in_executor(None, _do_subprocess)
         duration = loop.time() - t0
+
         return K8sResult(
             command=cmd,
-            exit_code=proc.returncode if proc.returncode is not None else -1,
-            stdout=stdout_b.decode("utf-8", errors="replace"),
-            stderr=stderr_b.decode("utf-8", errors="replace"),
+            exit_code=rc,
+            stdout=out,
+            stderr=err,
             duration_seconds=duration,
         )
 
