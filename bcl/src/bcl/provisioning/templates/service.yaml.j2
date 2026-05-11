@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ service_name }}
+  namespace: {{ namespace }}
+  labels:
+    app: {{ app_label }}
+    intelliai2doto/owner: bcl
+    intelliai2doto/managed-by: provisioning-engine
+    intelliai2doto/topology-id: "{{ topology_id }}"
+    intelliai2doto/app-id: "{{ app_id_label }}"
+    intelliai2doto/qm-name: "{{ qm_name }}"
+  annotations:
+    intelliai2doto/created-by: "BCL/provisioning-engine"
+    intelliai2doto/run-id: "{{ run_id }}"
+    intelliai2doto/lamport-clock: "{{ lamport_clock }}"
+spec:
+  type: ClusterIP
+  selector:
+    app: {{ app_label }}
+  ports:
+    - name: mq-listener
+      port: {{ listener_port }}
+      targetPort: mq-listener
+      protocol: TCP
+    - name: mqweb-https
+      port: {{ web_port }}
+      targetPort: mqweb-https
+      protocol: TCP

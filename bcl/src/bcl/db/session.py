@@ -1,10 +1,10 @@
 """Async SQLAlchemy engine and session factory for SQLite + aiosqlite.
 
-Priya: SQLAlchemy 2.0 async style. AsyncSession everywhere.
-Diego: PRAGMAs are applied on every connection via an `event.listens_for`
+SQLAlchemy 2.0 async style. AsyncSession everywhere.
+PRAGMAs are applied on every connection via an `event.listens_for`
 hook — SQLite re-applies pragmas per-connection, not globally.
 
-Marcus: There is exactly one engine per process. Sessions are short-lived,
+There is exactly one engine per process. Sessions are short-lived,
 created per-request via `get_session()` dependency.
 """
 

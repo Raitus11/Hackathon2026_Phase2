@@ -5,7 +5,7 @@ through `write_audit_entry`. Every row carries Lamport clock, wall-clock,
 correlation ID, actor, operation, payloads, before/after state, success
 flag, error message, duration.
 
-This is what makes the BCL the system of record (Marcus's Moat 3).
+This is what makes the BCL the system of record (Moat 3).
 The audit log is APPEND-ONLY at the application layer.
 """
 

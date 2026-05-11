@@ -1,6 +1,6 @@
 """BCL configuration. Driven by environment variables, with sane defaults.
 
-Marcus: every config knob the BCL reads must be visible here. No constants
+Every config knob the BCL reads must be visible here. No constants
 buried in modules. If it changes between dev/staging/prod, it's a Setting.
 """
 
@@ -90,13 +90,13 @@ class Settings(BaseSettings):
 
     # ─── Agents ──────────────────────────────────────────────────────
     agent_max_tool_calls_per_invocation: int = 8
-    """Wei: per-invocation budget cap. Prevents runaway loops."""
+    """Per-invocation budget cap. Prevents runaway loops."""
 
     agent_per_minute_rate_limit: int = 30
 
     # ─── Migration ───────────────────────────────────────────────────
     drain_wait_timeout_seconds: int = 300
-    """James's hard requirement — drain timeout with explicit fallback."""
+    """Hard requirement: drain timeout with explicit fallback."""
 
     drain_poll_interval_ms: int = 500
     """Sub-second polling for drain status."""

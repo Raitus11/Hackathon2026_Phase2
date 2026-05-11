@@ -1,0 +1,109 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ deployment_name }}
+  namespace: {{ namespace }}
+  labels:
+    app: {{ app_label }}
+    qm-group: intelliai2doto
+    qm-instance: {{ app_label }}
+    intelliai2doto/owner: bcl
+    intelliai2doto/managed-by: provisioning-engine
+    intelliai2doto/topology-id: "{{ topology_id }}"
+    intelliai2doto/app-id: "{{ app_id_label }}"
+    intelliai2doto/qm-name: "{{ qm_name }}"
+  annotations:
+    intelliai2doto/created-by: "BCL/provisioning-engine"
+    intelliai2doto/run-id: "{{ run_id }}"
+    intelliai2doto/lamport-clock: "{{ lamport_clock }}"
+spec:
+  replicas: 1
+  progressDeadlineSeconds: 600
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: {{ app_label }}
+  strategy:
+    type: Recreate    # MQ data is on RWO PVC; Rolling would need RWX. Recreate is correct here.
+  template:
+    metadata:
+      annotations:
+        sidecar.istio.io/inject: "false"
+      labels:
+        app: {{ app_label }}
+        qm-group: intelliai2doto
+        qm-instance: {{ app_label }}
+        intelliai2doto/owner: bcl
+        intelliai2doto/qm-name: "{{ qm_name }}"
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+      dnsPolicy: ClusterFirst
+      securityContext: {}
+      containers:
+        - name: mq
+          image: {{ mq_image }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: LICENSE
+              value: accept
+            - name: MQ_QMGR_NAME
+              value: {{ qm_name }}
+            # Passwords sourced from mounted secret files, NOT plaintext env.
+            # IBM MQ container supports *_FILE env vars natively.
+            - name: MQ_ADMIN_PASSWORD_FILE
+              value: /run/secrets/mq/mqAdminPassword
+            - name: MQ_APP_PASSWORD_FILE
+              value: /run/secrets/mq/mqAppPassword
+          ports:
+            - name: mq-listener
+              containerPort: {{ listener_port }}
+              protocol: TCP
+            - name: mqweb-https
+              containerPort: {{ web_port }}
+              protocol: TCP
+          resources:
+            requests:
+              cpu: {{ cpu_request }}
+              memory: {{ memory_request }}
+            limits:
+              cpu: {{ cpu_limit }}
+              memory: {{ memory_limit }}
+          startupProbe:
+            exec:
+              command: ["chkmqstarted"]
+            failureThreshold: 18
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["chkmqhealthy"]
+            failureThreshold: 3
+            periodSeconds: 30
+            successThreshold: 1
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command: ["chkmqready"]
+            failureThreshold: 3
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 5
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+            - name: mq-passwords
+              mountPath: /run/secrets/mq
+              readOnly: true
+            - name: mq-data
+              mountPath: /mnt/mqm
+      volumes:
+        - name: mq-passwords
+          secret:
+            secretName: {{ secret_name }}
+            defaultMode: 0o400
+        - name: mq-data
+          persistentVolumeClaim:
+            claimName: {{ pvc_name }}

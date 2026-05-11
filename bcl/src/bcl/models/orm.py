@@ -1,6 +1,6 @@
 """SQLAlchemy ORM models — the state shape of the BCL.
 
-Design notes (Marcus + Priya + Aisha + James):
+Design notes:
 
 * Every state-changing operation produces an AuditLog entry with a Lamport
   timestamp. Lamport ordering is the source of truth for causality; wall-clock
@@ -8,7 +8,7 @@ Design notes (Marcus + Priya + Aisha + James):
 
 * AuditLog is APPEND-ONLY. There are no UPDATE or DELETE paths in code.
   An Alembic migration is the only thing that can touch a written row.
-  This is a Marcus-mandated invariant for the system-of-record property.
+  This is a critical invariant for the system-of-record property.
 
 * Migration state is the second source of truth. AuditLog records what
   happened; Migration records the current state of each app's migration.
@@ -155,7 +155,13 @@ class AuditOperation(str, enum.Enum):
     TOPOLOGY_DELETED = "TOPOLOGY_DELETED"
 
     # QM lifecycle (K8s-level, not MQ-level)
+    PROVISION_STARTED = "PROVISION_STARTED"
+    PROVISION_COMPLETED = "PROVISION_COMPLETED"
+    PROVISION_FAILED = "PROVISION_FAILED"
+    QM_PVC_CREATED = "QM_PVC_CREATED"
+    QM_SECRET_CREATED = "QM_SECRET_CREATED"
     QM_DEPLOYED = "QM_DEPLOYED"
+    QM_SERVICE_CREATED = "QM_SERVICE_CREATED"
     QM_READY = "QM_READY"
     QM_DELETED = "QM_DELETED"
 
@@ -199,7 +205,7 @@ class AuditOperation(str, enum.Enum):
 
 
 class AgentName(str, enum.Enum):
-    """The two agents in our scope (Wei + Sara, post-cuts)."""
+    """The two agents in our scope (post-cuts)."""
 
     MIGRATION_PLANNER = "MIGRATION_PLANNER"
     OPERATOR_ASSISTANT = "OPERATOR_ASSISTANT"
@@ -363,7 +369,7 @@ class MigrationStep(Base):
     Steps are ordered. Each step records:
         - what was done (the audit_op + payload)
         - whether it succeeded
-        - the inverse action for rollback (Marcus: the rollback engine
+        - the inverse action for rollback (the rollback engine
           uses this; without it, rollback is impossible)
     """
 
@@ -390,7 +396,7 @@ class MigrationStep(Base):
     rollback_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     """The inverse action's parameters. Computed when the step is created.
 
-    Marcus: the rollback engine reads this column in reverse-step-index order.
+    The rollback engine reads this column in reverse-step-index order.
     If a step has no inverse (e.g. some ALTER QMGR), rollback_payload is null
     and the rollback engine logs that the step is non-reversible.
     """
@@ -474,7 +480,7 @@ class AuditLog(Base):
     on cross-process events — though we are single-instance for the
     hackathon, so received clocks don't apply).
 
-    Aisha: this table must not have ON UPDATE triggers, must not be in any
+    This table must not have ON UPDATE triggers, must not be in any
     GRANT/REVOKE that allows UPDATE/DELETE for the BCL role. Schema-level
     immutability is enforced by code review and by integration tests
     that try to UPDATE/DELETE and assert failure.
@@ -628,7 +634,7 @@ class KnowledgeEntry(Base):
 
     Sources include: ingested MQ docs, internal naming policies, past incidents
     summarized at migration completion. Vector embeddings are NOT stored here —
-    we use BM25-only retrieval for the hackathon (Hiroshi: vector search adds
+    we use BM25-only retrieval for the hackathon (vector search adds
     a chroma/pgvector dependency for marginal gain at 7-app scope; cut).
     """
 
@@ -651,6 +657,82 @@ class KnowledgeEntry(Base):
     )
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Provisioning — tracks /topologies/{id}/provision runs
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class ProvisionState(str, enum.Enum):
+    """State machine for a single /topologies/{id}/provision run."""
+
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    PARTIALLY_COMPLETED = "PARTIALLY_COMPLETED"   # some QMs deployed, some failed
+
+
+class ProvisionRun(Base):
+    """One execution of POST /topologies/{id}/provision.
+
+    Async: the POST returns immediately with a run_id; the run executes
+    in the background, updating progress here. Clients poll
+    GET /topologies/{id}/provision/{run_id}/status.
+
+    Every K8s resource applied (PVC, Secret, Deployment, Service) is
+    audit-logged with this run's correlation_id so the full provenance
+    chain is recoverable.
+    """
+
+    __tablename__ = "provision_runs"
+    __table_args__ = (
+        Index("ix_prov_run_topology", "topology_id"),
+        Index("ix_prov_run_state", "state"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(String(36), unique=True, nullable=False)
+    """UUID returned to the client for polling."""
+
+    topology_id: Mapped[int] = mapped_column(
+        ForeignKey("topologies.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    state: Mapped[ProvisionState] = mapped_column(
+        SAEnum(ProvisionState, native_enum=False), nullable=False
+    )
+
+    qms_total: Mapped[int] = mapped_column(Integer, nullable=False)
+    qms_ready: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    qms_failed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    correlation_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    """Same correlation_id appears on every audit log entry for this run."""
+
+    actor: Mapped[str] = mapped_column(String(64), nullable=False)
+    """Identity of the operator who initiated the run. Audit traceability."""
+
+    operator_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Optional human-friendly message attached at start time."""
+
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Populated if state in {FAILED, PARTIALLY_COMPLETED}."""
+
+    progress: Mapped[list[Any]] = mapped_column(JSON, default=list, nullable=False)
+    """Append-only list of per-QM progress events. Each event is a dict:
+    {qm_name, phase, status, timestamp, error?}.
+    Phases: PVC_APPLY, SECRET_APPLY, DEPLOYMENT_APPLY, SERVICE_APPLY,
+    WAIT_FOR_READY, COMPLETE.
+    """
+
+
 __all__ = [
     "Base",
     # enums
@@ -663,6 +745,7 @@ __all__ = [
     "ValidationOutcome",
     "AuditOperation",
     "AgentName",
+    "ProvisionState",
     # tables
     "Application",
     "Topology",
@@ -674,4 +757,5 @@ __all__ = [
     "AgentInvocation",
     "EvidenceBundle",
     "KnowledgeEntry",
+    "ProvisionRun",
 ]

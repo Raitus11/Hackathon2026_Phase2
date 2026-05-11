@@ -1,6 +1,6 @@
 """Pydantic schemas for the BCL REST API.
 
-Design (Priya + Marcus):
+Design notes:
     - Schemas are SEPARATE from ORM models. Same model on the wire and in the
       DB couples API evolution to schema migrations; we don't want that.
     - All schemas are immutable (`model_config = ConfigDict(frozen=True)`)
@@ -55,7 +55,7 @@ class _MutableModel(BaseModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Naming validators (Marcus: enforce IBM MQ name limits at the schema
+# Naming validators — enforce IBM MQ name limits at the schema
 # layer; the guardrails module enforces enterprise patterns on top)
 # ─────────────────────────────────────────────────────────────────────────
 
@@ -115,7 +115,7 @@ class FlowSpec(_MutableModel):
     consumer_neighnourhood: str = Field(
         # sic — preserved from CSV. Accepts BOTH the typo and the correct
         # spelling on input; always stored/serialized as the original typo
-        # to maintain traceability to the source CSV (Marcus's call).
+        # to maintain traceability to the source CSV.
         validation_alias=AliasChoices(
             "consumer_neighnourhood",
             "consumer_neighbourhood",
