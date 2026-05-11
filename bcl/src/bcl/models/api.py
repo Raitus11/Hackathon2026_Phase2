@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from bcl.models.orm import (
     AgentName,
@@ -49,7 +49,8 @@ class _MutableModel(BaseModel):
 
     model_config = ConfigDict(
         validate_assignment=True,
-        extra="forbid",   # reject unknown fields — fail loud, fail early
+        extra="forbid",        # reject unknown fields — fail loud, fail early
+        populate_by_name=True, # required for AliasChoices to also accept the field name
     )
 
 
@@ -111,7 +112,15 @@ class FlowSpec(_MutableModel):
     channel_name: str | None = None
     consumer_app_id: str
     consumer_app_name: str
-    consumer_neighnourhood: str   # sic — preserved from CSV
+    consumer_neighnourhood: str = Field(
+        # sic — preserved from CSV. Accepts BOTH the typo and the correct
+        # spelling on input; always stored/serialized as the original typo
+        # to maintain traceability to the source CSV (Marcus's call).
+        validation_alias=AliasChoices(
+            "consumer_neighnourhood",
+            "consumer_neighbourhood",
+        ),
+    )
     consumer_queue_manager: str
     consumer_queue_name: str
     consumer_queue_type: Literal["Local", "Remote"]
