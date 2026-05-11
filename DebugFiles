@@ -1,0 +1,32 @@
+@'
+import asyncio
+import sys
+sys.path.insert(0, "src")
+from bcl.provisioning.k8s_client import K8sClient
+
+async def main():
+    c = K8sClient(namespace="roco-dev")
+    print(f"Resolved binary: {c.binary}")
+    yaml_text = """apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: smoke-bcl-test
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: sc-ontap-nas
+  resources:
+    requests:
+      storage: 100Mi
+"""
+    r = await c._run(
+        ["apply", "-n", "roco-dev", "--dry-run=client", "-f", "-"],
+        stdin=yaml_text,
+    )
+    print(f"EXIT: {r.exit_code}")
+    print(f"STDOUT: {r.stdout!r}")
+    print(f"STDERR: {r.stderr!r}")
+
+asyncio.run(main())
+'@ | Out-File -Encoding ASCII test_bcl_k8s.py
+
+python test_bcl_k8s.py
