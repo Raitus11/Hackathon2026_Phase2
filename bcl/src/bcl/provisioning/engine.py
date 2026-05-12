@@ -522,6 +522,11 @@ async def _append_progress(
     from sqlalchemy.orm.attributes import flag_modified
 
     run = await _fetch_run(session, run_id)
+    # Force a fresh read from the DB. Without this, in fast-succession
+    # commits with separate sessions (dry-run loop), the next session's
+    # identity-map or aiosqlite connection cache can return a stale
+    # `progress` list, silently dropping in-flight events.
+    await session.refresh(run, attribute_names=["progress"])
     event: dict[str, Any] = {
         "qm_name": qm_name,
         "phase": phase,
