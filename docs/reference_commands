@@ -1,13 +1,3 @@
-argv=["amqsput", flow.producer_queue_name, flow.producer_queue_manager],
+oc exec -i deployment/qm-wl6eebdj -n roco-dev -- bash -c "for i in 1 2 3 4 5 6 7 8 9 10; do echo '' | /opt/mqm/samp/bin/amqsget LIY.JUUD.WUTQE.XL21 WL6EEBDJ -wait 1 2>/dev/null; done; echo 'DISPLAY QLOCAL(LIY.JUUD.WUTQE.XL21) CURDEPTH' | runmqsc WL6EEBDJ"
 
-argv=["/opt/mqm/samp/bin/amqsput", flow.producer_queue_name, flow.producer_queue_manager],
-
-
-argv=["amqsget", flow.consumer_queue_name, flow.consumer_queue_manager],
-
-argv=["/opt/mqm/samp/bin/amqsget", flow.consumer_queue_name, flow.consumer_queue_manager],
-
-
-stdin=body.payload + "\n",
-
-stdin=body.payload + "\n\n",
+oc exec -i deployment/qm-wl6eebdj -n roco-dev -- bash -c "for i in 1 2 3 4 5 6 7 8 9 10; do /opt/mqm/samp/bin/amqsget LIY.JUUD.WUTQE.XL21 WL6EEBDJ < /dev/null 2>/dev/null; done; echo 'DISPLAY QLOCAL(LIY.JUUD.WUTQE.XL21) CURDEPTH' | runmqsc WL6EEBDJ"
