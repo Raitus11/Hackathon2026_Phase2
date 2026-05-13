@@ -39,3 +39,8 @@ for line in get_stdout.splitlines():
 if received is None and body.payload in get_stdout:
     received = body.payload
 
+
+
+
+
+Get-Content bcl\src\bcl\api\message_flow.py | Select-String -Pattern "_kubectl_exec_with_stdin|def _kubectl" -Context 0,25
