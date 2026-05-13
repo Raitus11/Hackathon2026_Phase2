@@ -1,0 +1,22 @@
+try { Invoke-RestMethod -Uri "http://localhost:8080/topologies/5/test-message-flow" -Method POST -Body '{"producer_app_id":"LIY/KW","consumer_app_id":"JUUD/C9","payload":"PROBE-FROM-UI"}' -ContentType "application/json" | ConvertTo-Json -Depth 10 } catch { $_.ErrorDetails.Message }
+
+
+curl.exe -s -X POST http://localhost:8080/topologies/5/test-message-flow -H "Content-Type: application/json" -d "{\"producer_app_id\":\"LIY/KW\",\"consumer_app_id\":\"JUUD/C9\",\"payload\":\"PROBE-FROM-UI\"}"
+
+oc get deploy -n roco-dev
+oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'DISPLAY QLOCAL(LIY.JUUD.*) WHERE(QTYPE EQ QLOCAL)' | runmqsc WL6EEBDJ"
+
+
+$body = @{
+  producer_app_id = "LIY/KW"
+  consumer_app_id = "JUUD/C9"
+  payload = "PROBE-FROM-UI"
+} | ConvertTo-Json
+
+try {
+  Invoke-RestMethod -Uri "http://localhost:8080/topologies/5/test-message-flow" `
+    -Method POST -Body $body -ContentType "application/json" `
+    | ConvertTo-Json -Depth 10
+} catch {
+  $_.ErrorDetails.Message
+}
