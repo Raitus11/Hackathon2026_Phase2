@@ -8,3 +8,13 @@ oc exec deployment/qm-wl6er0c -n roco-dev -- bash -c "runmqsc WL6ER0C <<EOF
 DISPLAY QLOCAL('LIY.JUUD.XR21')
 DISPLAY QLOCAL(*) WHERE(QUEUE LK 'LIY.*')
 EOF"
+
+
+
+oc exec deployment/qm-wl6er0c -n roco-dev -- bash -c "runmqsc WL6ER0C <<EOF
+DEFINE QLOCAL('LIY.JUUD.XR21') REPLACE
+EOF"
+
+oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "runmqsc WL6EEBDJ <<EOF
+CLEAR QLOCAL('WL6ER0C.XMIT')
+EOF"
