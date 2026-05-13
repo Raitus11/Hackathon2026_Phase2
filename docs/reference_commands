@@ -81,3 +81,17 @@ rc, get_stdout, get_stderr, get_duration = await _kubectl_exec_with_stdin(
 )
 
 Invoke-RestMethod "http://localhost:8080/audit?limit=50" | Select-Object -ExpandProperty entries | Where-Object { $_.request_payload.kind -eq "test_message_get" } | Sort-Object -Property lamport_clock -Descending | Select-Object -First 1 | ConvertTo-Json -Depth 10
+
+
+$pod="deployment/qm-wl6eebdj"; $qm="WL6EEBDJ"; $ns="roco-dev"; oc exec $pod -n $ns -- bash -c "runmqsc -e $qm <<< 'DISPLAY QLOCAL(*) WHERE(QUEUE NL ''SYSTEM.*'')' | awk -F'[()]' '/QUEUE\(/{print \`"CLEAR QLOCAL(`'\`"\$2\`"`')\`"}' | runmqsc $qm"
+
+
+$ns="roco-dev"; oc get pods -n $ns -l app=qm -o name | ForEach-Object {
+  $pod = $_
+  $qm = (oc exec $pod -n $ns -- bash -c 'dspmq | head -1 | sed "s/.*QMNAME(\([^)]*\)).*/\1/"').Trim()
+  Write-Host "→ $pod ($qm)"
+  oc exec $pod -n $ns -- bash -c "runmqsc -e $qm <<< 'DISPLAY QLOCAL(*) WHERE(QUEUE NL ''SYSTEM.*'')' | awk -F'[()]' '/QUEUE\(/{print \`"CLEAR QLOCAL(`'\`"\$2\`"`')\`"}' | runmqsc $qm" 2>&1 | Select-String -Pattern 'AMQ8022|AMQ7041|cleared'
+}
+
+
+oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'DISPLAY QLOCAL(*) WHERE(QUEUE NL ''SYSTEM.*'') CURDEPTH' | runmqsc WL6EEBDJ" | Select-String CURDEPTH
