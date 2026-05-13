@@ -4,8 +4,8 @@ Pure function: same inputs always produce identical YAML output.
 This makes audit-log content deterministic per Lamport step and makes
 provisioning testable without a real cluster.
 
-Marcus principle: every byte sent to `oc apply` is also captured in the
-audit log payload, so a rollback can reconstruct exact prior state.
+Every byte sent to `oc apply` is also captured in the audit log payload,
+so a rollback can reconstruct exact prior state.
 """
 
 from __future__ import annotations

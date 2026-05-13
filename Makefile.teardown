@@ -1,0 +1,187 @@
+# IntelliAI BCL — teardown / lifecycle Makefile targets
+#
+# Drop these targets into your existing Makefile (or include this file).
+# All targets assume the BCL is running locally on BCL_URL and topologies
+# already exist with the expected names.
+#
+# Usage:
+#   make ingest-source           # POST source.csv -> topology row + QM rows
+#   make provision-source        # stand up source QM pods
+#   make realize-source          # create MQ objects (queues/channels/XMITQs)
+#   make test-message-source     # send one message through source topology
+#
+#   make teardown-source         # MQ objects -> pods -> DB row (full nuke)
+#   make teardown-target         # same for target
+#   make teardown-all            # both
+#
+# Override via env: BCL_URL, SRC_NAME, TGT_NAME, SRC_CSV, TGT_CSV, ACTOR
+
+BCL_URL    ?= http://localhost:8000
+SRC_NAME   ?= source-topology
+TGT_NAME   ?= target-topology
+SRC_CSV    ?= data/source.csv
+TGT_CSV    ?= data/target.csv
+ACTOR      ?= operator:make
+POLL_SEC   ?= 3
+
+# Internal: resolve topology ID by name. Returns "0" if not found.
+define topology_id_by_name
+$$(curl -s $(BCL_URL)/topologies | python -c "import sys,json; \
+data=json.load(sys.stdin); \
+matches=[t['id'] for t in data if t['name']==$$1]; \
+print(matches[0] if matches else 0)")
+endef
+
+# ─────────────────────────────────────────────────────────────────────────
+# Ingest
+# ─────────────────────────────────────────────────────────────────────────
+
+.PHONY: ingest-source
+ingest-source:
+	@echo "→ ingesting $(SRC_CSV) as topology $(SRC_NAME)"
+	curl -fsS -X POST $(BCL_URL)/topologies/ingest-csv \
+		-F "name=$(SRC_NAME)" \
+		-F "kind=SOURCE" \
+		-F "file=@$(SRC_CSV)" \
+		-H "X-Actor: $(ACTOR)" | python -m json.tool
+
+.PHONY: ingest-target
+ingest-target:
+	@echo "→ ingesting $(TGT_CSV) as topology $(TGT_NAME)"
+	curl -fsS -X POST $(BCL_URL)/topologies/ingest-csv \
+		-F "name=$(TGT_NAME)" \
+		-F "kind=TARGET" \
+		-F "file=@$(TGT_CSV)" \
+		-H "X-Actor: $(ACTOR)" | python -m json.tool
+
+# ─────────────────────────────────────────────────────────────────────────
+# Provision / realize / test
+# ─────────────────────────────────────────────────────────────────────────
+
+.PHONY: provision-source
+provision-source:
+	@TID=$$(curl -fsS $(BCL_URL)/topologies | python -c "import sys,json; \
+print(next(t['id'] for t in json.load(sys.stdin) if t['name']=='$(SRC_NAME)'))"); \
+	echo "→ provisioning source topology id=$$TID (QM pods)"; \
+	curl -fsS -X POST $(BCL_URL)/topologies/$$TID/provision \
+		-H "Content-Type: application/json" \
+		-H "X-Actor: $(ACTOR)" \
+		-d '{"actor":"$(ACTOR)","message":"make provision-source"}' \
+		| python -m json.tool
+
+.PHONY: realize-source
+realize-source:
+	@TID=$$(curl -fsS $(BCL_URL)/topologies | python -c "import sys,json; \
+print(next(t['id'] for t in json.load(sys.stdin) if t['name']=='$(SRC_NAME)'))"); \
+	echo "→ realizing MQ objects on source topology id=$$TID"; \
+	curl -fsS -X POST $(BCL_URL)/topologies/$$TID/realize-mq-objects \
+		-H "Content-Type: application/json" \
+		-H "X-Actor: $(ACTOR)" \
+		-d '{"actor":"$(ACTOR)","message":"make realize-source"}' \
+		| python -m json.tool
+
+.PHONY: test-message-source
+test-message-source:
+	@TID=$$(curl -fsS $(BCL_URL)/topologies | python -c "import sys,json; \
+print(next(t['id'] for t in json.load(sys.stdin) if t['name']=='$(SRC_NAME)'))"); \
+	echo "→ sending one test message through source topology id=$$TID"; \
+	echo "  Set PRODUCER and CONSUMER env vars to override defaults"; \
+	curl -fsS -X POST $(BCL_URL)/topologies/$$TID/test-message-flow \
+		-H "Content-Type: application/json" \
+		-H "X-Actor: $(ACTOR)" \
+		-d '{ \
+			"producer_app_id":"$(or $(PRODUCER),LIY/KW)", \
+			"consumer_app_id":"$(or $(CONSUMER),JUUD/C9)", \
+			"payload":"INTELLIAI-PROBE-$(shell date +%s)" \
+		}' | python -m json.tool
+
+# ─────────────────────────────────────────────────────────────────────────
+# Teardown — sequenced
+# ─────────────────────────────────────────────────────────────────────────
+
+# Sequenced teardown:
+#   1) DELETE /realize-mq-objects   (MQ-objects teardown, async, wait)
+#   2) DELETE /provision             (K8s pods + PVCs)
+#   3) DELETE /topologies/{id}       (DB rows; cascades to QM rows)
+
+.PHONY: teardown-source
+teardown-source:
+	@TID=$$(curl -fsS $(BCL_URL)/topologies | python -c "import sys,json; \
+matches=[t['id'] for t in json.load(sys.stdin) if t['name']=='$(SRC_NAME)']; \
+print(matches[0] if matches else 0)"); \
+	if [ "$$TID" = "0" ]; then \
+		echo "  (no source topology named $(SRC_NAME); nothing to tear down)"; \
+		exit 0; \
+	fi; \
+	echo "→ STEP 1/3: MQ-object teardown on topology id=$$TID"; \
+	RUN_ID=$$(curl -fsS -X DELETE $(BCL_URL)/topologies/$$TID/realize-mq-objects \
+		-H "Content-Type: application/json" \
+		-H "X-Actor: $(ACTOR)" \
+		-d '{"actor":"$(ACTOR)","message":"make teardown-source"}' \
+		| python -c "import sys,json; print(json.load(sys.stdin)['run_id'])"); \
+	echo "  realize-teardown run_id=$$RUN_ID; polling..."; \
+	while true; do \
+		STATE=$$(curl -fsS $(BCL_URL)/topologies/$$TID/realize-mq-objects/$$RUN_ID/status \
+			| python -c "import sys,json; print(json.load(sys.stdin)['state'])"); \
+		echo "    state=$$STATE"; \
+		case $$STATE in COMPLETED|FAILED|PARTIALLY_COMPLETED) break ;; esac; \
+		sleep $(POLL_SEC); \
+	done; \
+	echo "→ STEP 2/3: K8s pod teardown on topology id=$$TID"; \
+	curl -fsS -X DELETE "$(BCL_URL)/topologies/$$TID/provision?actor=$(ACTOR)" \
+		| python -m json.tool; \
+	echo "→ STEP 3/3: DB row deletion (cascade) on topology id=$$TID"; \
+	curl -fsS -X DELETE "$(BCL_URL)/topologies/$$TID?actor=$(ACTOR)&cascade=false" \
+		| python -m json.tool; \
+	echo "✓ source topology fully torn down"
+
+.PHONY: teardown-target
+teardown-target:
+	@TID=$$(curl -fsS $(BCL_URL)/topologies | python -c "import sys,json; \
+matches=[t['id'] for t in json.load(sys.stdin) if t['name']=='$(TGT_NAME)']; \
+print(matches[0] if matches else 0)"); \
+	if [ "$$TID" = "0" ]; then \
+		echo "  (no target topology named $(TGT_NAME); nothing to tear down)"; \
+		exit 0; \
+	fi; \
+	echo "→ STEP 1/3: MQ-object teardown on topology id=$$TID"; \
+	RUN_ID=$$(curl -fsS -X DELETE $(BCL_URL)/topologies/$$TID/realize-mq-objects \
+		-H "Content-Type: application/json" \
+		-H "X-Actor: $(ACTOR)" \
+		-d '{"actor":"$(ACTOR)","message":"make teardown-target"}' \
+		| python -c "import sys,json; print(json.load(sys.stdin)['run_id'])"); \
+	echo "  realize-teardown run_id=$$RUN_ID; polling..."; \
+	while true; do \
+		STATE=$$(curl -fsS $(BCL_URL)/topologies/$$TID/realize-mq-objects/$$RUN_ID/status \
+			| python -c "import sys,json; print(json.load(sys.stdin)['state'])"); \
+		echo "    state=$$STATE"; \
+		case $$STATE in COMPLETED|FAILED|PARTIALLY_COMPLETED) break ;; esac; \
+		sleep $(POLL_SEC); \
+	done; \
+	echo "→ STEP 2/3: K8s pod teardown on topology id=$$TID"; \
+	curl -fsS -X DELETE "$(BCL_URL)/topologies/$$TID/provision?actor=$(ACTOR)" \
+		| python -m json.tool; \
+	echo "→ STEP 3/3: DB row deletion (cascade) on topology id=$$TID"; \
+	curl -fsS -X DELETE "$(BCL_URL)/topologies/$$TID?actor=$(ACTOR)&cascade=false" \
+		| python -m json.tool; \
+	echo "✓ target topology fully torn down"
+
+.PHONY: teardown-all
+teardown-all: teardown-source teardown-target
+	@echo "✓ all topologies torn down"
+
+# ─────────────────────────────────────────────────────────────────────────
+# Diagnostics
+# ─────────────────────────────────────────────────────────────────────────
+
+.PHONY: status
+status:
+	@echo "→ topologies:"
+	@curl -fsS $(BCL_URL)/topologies | python -m json.tool
+	@echo
+	@echo "→ recent audit (last 20):"
+	@curl -fsS "$(BCL_URL)/audit?limit=20" | python -m json.tool
+
+.PHONY: tests
+tests:
+	@set PYTHONPATH=. && pytest tests/ -v

@@ -325,7 +325,15 @@ async def _provision_one_qm(
 
     render_inputs = QMRenderInputs(
         app_id=app_id_for_naming,
-        qm_name=naming.mq_qmgr_name(app_id_for_naming),
+        # qm_name is the value that becomes MQ_QMGR_NAME inside the pod
+        # (see deployment.yaml.j2). It MUST equal the CSV's
+        # producer_queue_manager / consumer_queue_manager value so the
+        # MQSC objects derived from the CSV (RQMNAME, channel-name parts,
+        # etc.) resolve correctly. Previously this passed through
+        # naming.mq_qmgr_name() which appended "_QM" — that broke channel
+        # handshakes (QREMOTE.RQMNAME('WLZ03') vs runtime QM 'WLZ03_QM').
+        # CSV name is the authoritative identifier; runtime name must match it.
+        qm_name=qm_name_db,
         topology_id=topology_id,
         run_id=run_id,
         lamport_clock=await LamportClock.instance().peek(),

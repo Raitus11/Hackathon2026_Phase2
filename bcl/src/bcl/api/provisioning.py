@@ -278,4 +278,250 @@ async def teardown_topology(
     }
 
 
+# ═════════════════════════════════════════════════════════════════════════
+# MQ object realization endpoints
+# ═════════════════════════════════════════════════════════════════════════
+#
+# These create / tear down the MQ-level objects (queues, channels, XMITQs)
+# INSIDE the queue managers, after K8s provisioning has stood up the pods.
+#
+# Same async-run-with-polling pattern as the K8s provisioning above.
+#
+# Layering:
+#   POST /topologies/{id}/provision         -> stand up pods (engine.py)
+#   POST /topologies/{id}/realize-mq-objects -> populate MQ objects (mq_realize.py)
+#   DELETE /topologies/{id}/realize-mq-objects -> tear down MQ objects only
+#   DELETE /topologies/{id}/provision        -> tear down pods (existing above)
+# ═════════════════════════════════════════════════════════════════════════
+
+
+from bcl.models.orm import MqRealizeRun, MqRealizeState  # noqa: E402
+from bcl.provisioning import mq_realize  # noqa: E402
+
+
+class RealizeRequest(BaseModel):
+    """Body for POST /topologies/{id}/realize-mq-objects."""
+
+    actor: str = Field(
+        default="operator:anon",
+        min_length=1,
+        max_length=64,
+        description="Identity of the operator initiating the run; audit-logged.",
+    )
+    message: str | None = Field(
+        default=None,
+        max_length=512,
+        description="Optional free-text note attached to the run.",
+    )
+    dry_run: bool = Field(
+        default=False,
+        description=(
+            "If true, derive plans and emit progress events but do NOT "
+            "send MQSC to the QM pods. Useful for previewing what would "
+            "be applied."
+        ),
+    )
+
+
+class RealizeRunOut(BaseModel):
+    """Returned from POST/GET realize endpoints. Mirrors ProvisionRunOut."""
+
+    run_id: str
+    topology_id: int
+    direction: Literal["APPLY", "TEARDOWN"]
+    state: MqRealizeState
+    qms_total: int
+    qms_completed: int
+    qms_failed: int
+    commands_total: int
+    commands_applied: int
+    commands_skipped_idempotent: int
+    commands_failed: int
+    started_at: datetime
+    finished_at: datetime | None
+    correlation_id: str
+    actor: str
+    operator_message: str | None
+    error: str | None
+    progress: list[dict[str, Any]]
+    derived_plans_summary: dict[str, Any] | None
+
+    @classmethod
+    def from_orm_row(cls, row: MqRealizeRun) -> "RealizeRunOut":
+        return cls(
+            run_id=row.run_id,
+            topology_id=row.topology_id,
+            direction=row.direction,  # type: ignore[arg-type]
+            state=row.state,
+            qms_total=row.qms_total,
+            qms_completed=row.qms_completed,
+            qms_failed=row.qms_failed,
+            commands_total=row.commands_total,
+            commands_applied=row.commands_applied,
+            commands_skipped_idempotent=row.commands_skipped_idempotent,
+            commands_failed=row.commands_failed,
+            started_at=row.started_at,
+            finished_at=row.finished_at,
+            correlation_id=row.correlation_id,
+            actor=row.actor,
+            operator_message=row.operator_message,
+            error=row.error,
+            progress=row.progress or [],
+            derived_plans_summary=row.derived_plans_summary,
+        )
+
+
+# We import Literal here rather than at module top to keep the original
+# file's import block undisturbed (existing modules: typing.Annotated, Any).
+from typing import Literal  # noqa: E402
+
+
+@router.post(
+    "/{topology_id}/realize-mq-objects",
+    response_model=RealizeRunOut,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Create MQ objects (queues, channels, XMITQs) inside provisioned QMs",
+    description=(
+        "Derives an MQSC plan for every queue manager in the topology, then "
+        "applies it via `runmqsc` inside each QM pod. Idempotent: every "
+        "DEFINE uses REPLACE, and already-exists AMQ codes are tolerated. "
+        "Returns 202 immediately with a `run_id`; poll "
+        "GET /topologies/{id}/realize-mq-objects/{run_id}/status until "
+        "`state in {COMPLETED, FAILED, PARTIALLY_COMPLETED}`.\n\n"
+        "**Pre-requisite:** every QM in the topology must be provisioned "
+        "(i.e. POST /topologies/{id}/provision must have completed for "
+        "all QMs). If any QM is missing a pod, the request returns 400."
+    ),
+)
+async def realize_mq_objects(
+    topology_id: int,
+    body: RealizeRequest,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> RealizeRunOut:
+    topology = await session.get(Topology, topology_id)
+    if topology is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Topology {topology_id} not found",
+        )
+
+    try:
+        run = await mq_realize.start_realize_run(
+            session,
+            topology_id=topology_id,
+            direction="APPLY",
+            actor=body.actor,
+            operator_message=body.message,
+            session_factory=get_session_factory(),
+            dry_run=body.dry_run,
+        )
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+
+    return RealizeRunOut.from_orm_row(run)
+
+
+@router.delete(
+    "/{topology_id}/realize-mq-objects",
+    response_model=RealizeRunOut,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Tear down MQ objects only (leaves pods running)",
+    description=(
+        "The inverse of POST: derives the forward MQSC plan, then computes "
+        "its inverse (DELETE commands in reverse order with the DLQ and "
+        "QMGR-level commands skipped), and applies. Idempotent: "
+        "not-found AMQ codes are tolerated.\n\n"
+        "Use this when you want to recreate MQ objects without re-deploying "
+        "pods (e.g. after fixing the topology spec). To also tear down pods, "
+        "follow this with DELETE /topologies/{id}/provision, or use the "
+        "cascade-delete on the topology resource."
+    ),
+)
+async def teardown_mq_objects(
+    topology_id: int,
+    body: RealizeRequest,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> RealizeRunOut:
+    topology = await session.get(Topology, topology_id)
+    if topology is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Topology {topology_id} not found",
+        )
+
+    try:
+        run = await mq_realize.start_realize_run(
+            session,
+            topology_id=topology_id,
+            direction="TEARDOWN",
+            actor=body.actor,
+            operator_message=body.message,
+            session_factory=get_session_factory(),
+            dry_run=body.dry_run,
+        )
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+
+    return RealizeRunOut.from_orm_row(run)
+
+
+@router.get(
+    "/{topology_id}/realize-mq-objects/{run_id}/status",
+    response_model=RealizeRunOut,
+    summary="Poll an MQ-realize run's progress",
+)
+async def get_realize_run_status(
+    topology_id: int,
+    run_id: str,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> RealizeRunOut:
+    run = await mq_realize.get_run(session, run_id)
+    if run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Realize run '{run_id}' not found",
+        )
+    if run.topology_id != topology_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Run '{run_id}' exists but belongs to topology "
+                f"{run.topology_id}, not {topology_id}"
+            ),
+        )
+    return RealizeRunOut.from_orm_row(run)
+
+
+@router.get(
+    "/{topology_id}/realize-mq-objects",
+    response_model=list[RealizeRunOut],
+    summary="List all MQ-realize runs for a topology",
+)
+async def list_realize_runs(
+    topology_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    limit: int = Query(default=20, ge=1, le=100),
+) -> list[RealizeRunOut]:
+    topology = await session.get(Topology, topology_id)
+    if topology is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Topology {topology_id} not found",
+        )
+    runs = await mq_realize.list_runs_for_topology(session, topology_id)
+    return [RealizeRunOut.from_orm_row(r) for r in runs[:limit]]
+
+
 __all__ = ["router"]

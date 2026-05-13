@@ -96,9 +96,10 @@ class ApplicationOut(_ImmutableModel):
 class FlowSpec(_MutableModel):
     """One row from the source/target CSV — one application-pair flow.
 
-    The schema preserves the input CSV's structure exactly, including the
-    typo `consumer_neighnourhood` (extra 'n') — we don't silently fix
-    upstream data.
+    The Python field name uses the correct spelling `consumer_neighbourhood`.
+    On the wire we accept BOTH the correct spelling and the historical typo
+    `consumer_neighnourhood` (extra 'n'), since some CSV exports still use
+    the typo. The model always emits the corrected spelling on serialization.
     """
 
     flow_type: Literal["Local", "Remote"]
@@ -112,13 +113,12 @@ class FlowSpec(_MutableModel):
     channel_name: str | None = None
     consumer_app_id: str
     consumer_app_name: str
-    consumer_neighnourhood: str = Field(
-        # sic — preserved from CSV. Accepts BOTH the typo and the correct
-        # spelling on input; always stored/serialized as the original typo
-        # to maintain traceability to the source CSV.
+    consumer_neighbourhood: str = Field(
+        # Correct spelling as the Python field; AliasChoices accepts the
+        # historical typo on the wire so legacy CSV exports continue to parse.
         validation_alias=AliasChoices(
-            "consumer_neighnourhood",
             "consumer_neighbourhood",
+            "consumer_neighnourhood",
         ),
     )
     consumer_queue_manager: str

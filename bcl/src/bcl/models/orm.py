@@ -733,6 +733,101 @@ class ProvisionRun(Base):
     """
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# MQ object realization — tracks /topologies/{id}/realize-mq-objects runs
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class MqRealizeState(str, enum.Enum):
+    """State machine for a single /realize-mq-objects (or teardown) run.
+
+    Same shape as ProvisionState. Separate enum so the two run lifecycles
+    can evolve independently without overloaded semantics.
+    """
+
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    PARTIALLY_COMPLETED = "PARTIALLY_COMPLETED"
+
+
+class MqRealizeRun(Base):
+    """One execution of POST or DELETE on /realize-mq-objects.
+
+    Mirrors ProvisionRun in shape (same async-with-polling pattern), but
+    tracks MQ-object-level provisioning rather than K8s-resource-level.
+
+    Two directions of the same engine:
+      - direction='APPLY'    -> DEFINE QLOCAL/QREMOTE/QXMIT/CHANNEL ...
+      - direction='TEARDOWN' -> DELETE QLOCAL/QREMOTE/QXMIT/CHANNEL ...
+
+    Every MQSC command issued is also recorded as one AuditLog row with
+    the matching AuditOperation.MQSC_* op, sharing this run's correlation_id.
+    """
+
+    __tablename__ = "mq_realize_runs"
+    __table_args__ = (
+        Index("ix_realize_run_topology", "topology_id"),
+        Index("ix_realize_run_state", "state"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(String(36), unique=True, nullable=False)
+
+    topology_id: Mapped[int] = mapped_column(
+        ForeignKey("topologies.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    direction: Mapped[str] = mapped_column(String(16), nullable=False)
+    """'APPLY' or 'TEARDOWN'. Determines whether commands are DEFINE or DELETE."""
+
+    state: Mapped[MqRealizeState] = mapped_column(
+        SAEnum(MqRealizeState, native_enum=False), nullable=False
+    )
+
+    # Counters: at the QM granularity, NOT command granularity, so the API
+    # response shape matches ProvisionRun closely.
+    qms_total: Mapped[int] = mapped_column(Integer, nullable=False)
+    qms_completed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    qms_failed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    # Command-level counters surface the deeper detail.
+    commands_total: Mapped[int] = mapped_column(Integer, nullable=False)
+    commands_applied: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    commands_skipped_idempotent: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
+    """Commands that ran but hit AMQ8350/AMQ8013/etc — already-exists during
+    APPLY, or already-absent during TEARDOWN. Counted as success."""
+    commands_failed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    correlation_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    actor: Mapped[str] = mapped_column(String(64), nullable=False)
+    operator_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    progress: Mapped[list[Any]] = mapped_column(JSON, default=list, nullable=False)
+    """Append-only list of per-QM events:
+    {qm_name, phase, status, timestamp, command_count?, error?, warnings?}.
+    Phases: PLAN_DERIVED, APPLYING, APPLIED, FAILED, COMPLETE.
+    """
+
+    derived_plans_summary: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True
+    )
+    """Snapshot of every QM's plan summary (qm_name -> plan.to_summary_dict()).
+    Captured at run start so 'what was supposed to happen' is recoverable
+    even after the run completes."""
+
+
 __all__ = [
     "Base",
     # enums
@@ -746,6 +841,7 @@ __all__ = [
     "AuditOperation",
     "AgentName",
     "ProvisionState",
+    "MqRealizeState",
     # tables
     "Application",
     "Topology",
@@ -758,4 +854,5 @@ __all__ = [
     "EvidenceBundle",
     "KnowledgeEntry",
     "ProvisionRun",
+    "MqRealizeRun",
 ]
