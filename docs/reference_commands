@@ -79,3 +79,5 @@ rc, get_stdout, get_stderr, get_duration = await _kubectl_exec_with_stdin(
     stdin="",
     timeout_seconds=max(5.0, min(15.0, body.timeout_seconds - put_duration - poll_duration)),
 )
+
+Invoke-RestMethod "http://localhost:8080/audit?limit=50" | Select-Object -ExpandProperty entries | Where-Object { $_.request_payload.kind -eq "test_message_get" } | Sort-Object -Property lamport_clock -Descending | Select-Object -First 1 | ConvertTo-Json -Depth 10
