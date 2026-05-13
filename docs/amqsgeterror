@@ -27,4 +27,24 @@ CLEAR QLOCAL('WL6ER0C.XMIT')
 START CHANNEL('WL6EEBDJ.TO.WL6ER0C')
 EOF"
 
-oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'DISPLAY QLOCAL(WL6ER0C.XMIT) CURDEPTH' | runmqsc WL6EEBDJ"
+oc exec deployment/qm-wl6oc exec deployment/qm-wl6er0c -n roco-dev -- bash -c "pkill -9 amqsget; pkill -9 amqsgbr"eebdj -n roco-dev -- bash -c "echo 'DISPLAY QLOCAL(WL6ER0C.XMIT) CURDEPTH' | runmqsc WL6EEBDJ"
+
+
+---------------------------
+
+
+oc exec deployment/qm-wl6er0c -n roco-dev -- bash -c "ps -ef | grep -E 'amqs|runmqsc' | grep -v grep"
+
+oc exec deployment/qm-wl6er0c -n roco-dev -- bash -c "pkill -9 amqsget; pkill -9 amqsgbr"
+
+# 1. PUT one manually
+oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'MANUAL-TEST' | /opt/mqm/samp/bin/amqsput LIY.WBSV.RG12 WL6EEBDJ"
+# (replace LIY.WBSV.RG12 with whatever your producer QREMOTE is — check from earlier audit)
+
+# 2. Wait 3 seconds then check depth on consumer
+Start-Sleep 3
+oc exec deployment/qm-wl6er0c -n roco-dev -- bash -c "echo 'DISPLAY QLOCAL(LIY.JUUD.XR21) CURDEPTH' | runmqsc WL6ER0C"
+
+# 3. GET it manually
+oc exec deployment/qm-wl6er0c -n roco-dev -- bash -c "/opt/mqm/samp/bin/amqsget LIY.JUUD.XR21 WL6ER0C" 2>&1 | Select-Object -First 10
+
