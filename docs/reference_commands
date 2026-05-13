@@ -1,6 +1,12 @@
-oc exec -i deployment/qm-wl6eebdj -n roco-dev -- bash -c "for i in 1 2 3 4 5 6 7 8 9 10; do echo '' | /opt/mqm/samp/bin/amqsget LIY.JUUD.WUTQE.XL21 WL6EEBDJ -wait 1 2>/dev/null; done; echo 'DISPLAY QLOCAL(LIY.JUUD.WUTQE.XL21) CURDEPTH' | runmqsc WL6EEBDJ"
-
-oc exec -i deployment/qm-wl6eebdj -n roco-dev -- bash -c "for i in 1 2 3 4 5 6 7 8 9 10; do /opt/mqm/samp/bin/amqsget LIY.JUUD.WUTQE.XL21 WL6EEBDJ < /dev/null 2>/dev/null; done; echo 'DISPLAY QLOCAL(LIY.JUUD.WUTQE.XL21) CURDEPTH' | runmqsc WL6EEBDJ"
+oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'DISPLAY QLOCAL(LIY.JUUD.WUTQE.XL21) ALL' | runmqsc WL6EEBDJ" | Select-String "GET|PUT|CURDEPTH"
 
 
-oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'DISPLAY QLOCAL(LIY.JUUD.WUTQE.XL21) CURDEPTH' | runmqsc WL6EEBDJ" | Select-String "CURDEPTH"
+oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'ALTER QLOCAL(LIY.JUUD.WUTQE.XL21) GET(ENABLED) PUT(ENABLED)' | runmqsc WL6EEBDJ"
+
+
+
+f"DEFINE QLOCAL('{queue_name}') REPLACE"
+
+f"DEFINE QLOCAL('{queue_name}') GET(ENABLED) PUT(ENABLED) REPLACE"
+
+oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'DISPLAY QLOCAL(LIY.JUUD.WUTQE.XL21) ALL' | runmqsc WL6EEBDJ" | Select-String "GET|PUT|CURDEPTH"
