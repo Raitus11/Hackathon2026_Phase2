@@ -48,6 +48,14 @@ oc exec deployment/qm-wl6er0c -n roco-dev -- bash -c "echo 'DISPLAY QLOCAL(LIY.J
 # 3. GET it manually
 oc exec deployment/qm-wl6er0c -n roco-dev -- bash -c "/opt/mqm/samp/bin/amqsget LIY.JUUD.XR21 WL6ER0C" 2>&1 | Select-Object -First 10
 
+-------------
+
+$t=Get-Date
+oc exec deployment/qm-wl6er0c -n roco-dev -- timeout 8 /opt/mqm/samp/bin/amqsget LIY.JUUD.XR21 WL6ER0C 2>&1
+"elapsed: $((Get-Date) - $t), exit: $LASTEXITCODE"
+
+oc exec deployment/qm-wl6er0c -n roco-dev -- bash -c "echo 'DISPLAY QLOCAL(LIY.JUUD.XR21) CURDEPTH' | runmqsc WL6ER0C"
+
 ----------------------
 
 $t=Get-Date; oc exec deployment/qm-wl6er0c -n roco-dev -- /opt/mqm/samp/bin/amqsget LIY.JUUD.XR21 WL6ER0C 2>&1 | Select-Object -First 10; "elapsed: $((Get-Date) - $t)"
