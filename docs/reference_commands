@@ -1,3 +1,12 @@
-oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'DISPLAY QLOCAL(LIY.JUUD.WUTQE.XL21) ALL' | runmqsc WL6EEBDJ" | Select-String "USAGE|SHARE|DEFSOPT|DEFPRESP|MAXMSGL"
+oc exec -i deployment/qm-wl6eebdj -n roco-dev -- /opt/mqm/samp/bin/amqsget LIY.JUUD.WUTQE.XL21 WL6EEBDJ
 
-oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'ALTER QLOCAL(LIY.JUUD.WUTQE.XL21) USAGE(NORMAL)' | runmqsc WL6EEBDJ"
+
+
+# Step 1: PUT a fresh message
+oc exec -i deployment/qm-wl6eebdj -n roco-dev -- bash -c "printf 'MANUAL-TEST\n\n' | /opt/mqm/samp/bin/amqsput LIY.JUUD.WUTQE.XL21 WL6EEBDJ"
+
+# Step 2: check depth
+oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'DISPLAY QLOCAL(LIY.JUUD.WUTQE.XL21) CURDEPTH' | runmqsc WL6EEBDJ" | Select-String "CURDEPTH"
+
+# Step 3: GET it back
+oc exec -i deployment/qm-wl6eebdj -n roco-dev -- /opt/mqm/samp/bin/amqsget LIY.JUUD.WUTQE.XL21 WL6EEBDJ
