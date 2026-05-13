@@ -1,0 +1,83 @@
+Drain message
+oc exec -i deployment/qm-wl6eebdj -n roco-dev -- /opt/mqm/samp/bin/amqsget LIY.JUUD.WUTQE.XL21 WL6EEBDJ
+
+VErify depth 0
+oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'DISPLAY QLOCAL(LIY.JUUD.WUTQE.XL21) CURDEPTH' | runmqsc WL6EEBDJ" | Select-String "CURDEPTH"
+
+In bcl/src/bcl/api/message_flow.py, find
+
+received: str | None = None
+for line in get_stdout.splitlines():
+    line_stripped = line.strip()
+    if line_stripped == body.payload:
+        received = line_stripped
+        break
+# Fallback: a substring search if exact match missed due to amqsget
+# framing variations across MQ versions.
+if received is None and body.payload in get_stdout:
+    received = body.payload
+
+
+Replace
+import re
+
+received: str | None = None
+# amqsget formats each delivered message as: message <PAYLOAD>
+# Extract everything between the angle brackets on lines starting with "message ".
+for line in get_stdout.splitlines():
+    stripped = line.strip()
+    m = re.match(r"^message\s+<(.*)>$", stripped)
+    if m:
+        candidate = m.group(1)
+        if candidate == body.payload:
+            received = candidate
+            break
+        # Keep the first message we saw even if it doesn't match — useful for diagnostics.
+        if received is None:
+            received = candidate
+# Last-ditch: substring search anywhere in stdout.
+if received is None and body.payload in get_stdout:
+    received = body.payload
+
+
+
+
+
+Get-Content bcl\src\bcl\api\message_flow.py | Select-String -Pattern "_kubectl_exec_with_stdin|def _kubectl" -Context 0,25
+
+Invoke-RestMethod "http://localhost:8080/topologies/5/queue-managers" | ConvertTo-Json -Depth 5 | Out-File qm.json ; notepad qm.json
+
+cmd = [binary, "exec", "-i", "-n", namespace, pod_name, "--", *argv]
+
+target = pod_name if pod_name.startswith("deployment/") or "/" in pod_name else f"deployment/{pod_name}"
+cmd = [binary, "exec", "-i", "-n", namespace, target, "--", *argv]
+
+oc exec -i deployment/qm-wl6eebdj -n roco-dev -- /opt/mqm/samp/bin/amqsget LIY.JUUD.WUTQE.XL21 WL6EEBDJ
+
+
+
+
+
+
+rc, get_stdout, get_stderr, get_duration = await _kubectl_exec_with_stdin(
+    binary=mq_binary,
+    namespace=settings.namespace,
+    pod_name=consumer_qm_row.pod_name,
+    argv=["/opt/mqm/samp/bin/amqsget", flow.consumer_queue_name, flow.consumer_queue_manager],
+    stdin="",
+    timeout_seconds=max(5.0, min(15.0, body.timeout_seconds - put_duration - poll_duration)),
+)
+
+rc, get_stdout, get_stderr, get_duration = await _kubectl_exec_with_stdin(
+    binary=mq_binary,
+    namespace=settings.namespace,
+    pod_name=consumer_qm_row.pod_name,
+    argv=[
+        "bash", "-c",
+        f"/opt/mqm/samp/bin/amqsget {flow.consumer_queue_name} {flow.consumer_queue_manager}"
+    ],
+    stdin="",
+    timeout_seconds=max(5.0, min(15.0, body.timeout_seconds - put_duration - poll_duration)),
+)
+
+Invoke-RestMethod "http://localhost:8080/audit?limit=50" | Select-Object -ExpandProperty entries | Where-Object { $_.request_payload.kind -eq "test_message_get" } | Sort-Object -Property lamport_clock -Descending | Select-Object -First 1 | ConvertTo-Json -Depth 10

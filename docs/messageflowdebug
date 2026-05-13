@@ -1,0 +1,3 @@
+Invoke-RestMethod "http://localhost:8080/audit?limit=50" | Select-Object -ExpandProperty entries | Where-Object { $_.request_payload.kind -eq "test_message_get" } | Sort-Object -Property lamport_clock -Descending | Select-Object -First 1 | ConvertTo-Json -Depth 10
+
+Get-Content bcl\src\bcl\api\message_flow.py | Select-String -Pattern "amqsget" -Context 1,3
