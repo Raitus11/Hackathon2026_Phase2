@@ -1,1 +1,25 @@
 Invoke-RestMethod "http://localhost:8080/audit?limit=20" | Select-Object -ExpandProperty entries | Where-Object { $_.request_payload.kind -eq "test_message_get" } | Select-Object -Last 1 | ConvertTo-Json -Depth 10
+
+Drain message::
+oc exec -i deployment/qm-wl6eebdj -n roco-dev -- /opt/mqm/samp/bin/amqsget LIY.JUUD.WUTQE.XL21 WL6EEBDJ
+
+
+In bcl/src/bcl/api/message_flow.py, find the amqsget call (image 7 from earlier):
+rc, get_stdout, get_stderr, get_duration = await _kubectl_exec_with_stdin(
+    binary=mq_binary,
+    namespace=settings.namespace,
+    pod_name=consumer_qm_row.pod_name,
+    argv=["amqsget", flow.consumer_queue_name, flow.consumer_queue_manager],
+    stdin=None,           ← THIS IS THE BUG
+    timeout_seconds=min(15.0, body.timeout_seconds - put_duration - poll_duration),
+)
+
+replace
+rc, get_stdout, get_stderr, get_duration = await _kubectl_exec_with_stdin(
+    binary=mq_binary,
+    namespace=settings.namespace,
+    pod_name=consumer_qm_row.pod_name,
+    argv=["/opt/mqm/samp/bin/amqsget", flow.consumer_queue_name, flow.consumer_queue_manager],
+    stdin="",
+    timeout_seconds=max(5.0, min(15.0, body.timeout_seconds - put_duration - poll_duration)),
+)
