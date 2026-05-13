@@ -192,19 +192,41 @@ def _find_flow_between(
 # ─────────────────────────────────────────────────────────────────────────
 
 
-def _resolve_pod_target(pod_name: str) -> str:
-    """Prefix bare pod names with `deployment/` so `oc exec` resolves
-    to the running pod of the deployment.
+# A K8s pod created by a Deployment has the shape:
+#   <deployment>-<10-char-replicaset-hash>-<5-char-pod-hash>
+# e.g. "qm-wl6eebdj-775b69dbbc-wdxkz".  We use this regex to decide
+# whether the stored name is a real pod or a deployment name, because
+# `oc exec deployment/<pod-name>` fails with "deployments.apps not
+# found" while `oc exec pod/<pod-name>` works.
+_POD_NAME_SUFFIX_RE = re.compile(r"-[a-z0-9]{8,10}-[a-z0-9]{5}$")
 
-    `oc exec my-pod-name -- ...` requires the exact pod name including
-    the random suffix; `oc exec deployment/my-name -- ...` lets oc
-    pick the running pod for us. Our QueueManager rows store the
-    deployment-style name (e.g. "qm-wl6eebdj"), so we add the prefix
-    here. If a caller already provided a slash form (e.g. "pod/foo"
-    or "deployment/foo") we leave it alone.
+
+def _resolve_pod_target(pod_name: str) -> str:
+    """Return a target spec that `oc exec` accepts.
+
+    Behaviour:
+      - "pod/foo" or "deployment/foo" (already prefixed): returned as-is.
+      - "qm-wl6eebdj-775b69dbbc-wdxkz" (full pod name with the K8s
+        replicaset+pod hash suffix): returned as "pod/<name>".
+      - "qm-wl6eebdj" (bare deployment name): returned as
+        "deployment/<name>" so oc picks the running pod.
+
+    The QueueManager.pod_name column currently stores **full pod names**
+    (the value comes from `oc get pod -o name` in the provisioner), so
+    in practice the pod/ branch fires. The deployment/ branch is kept
+    for forward-compatibility if we ever switch the provisioner to
+    record deployment names instead.
+
+    Bug history: previous version unconditionally prefixed
+    "deployment/", which produced
+        "deployments.apps \"qm-wl6eebdj-775b69dbbc-wdxkz\" not found"
+    because oc looked up a Deployment with the full pod name. Caught
+    via the audit log after 7 hours of debugging on 2026-05-14.
     """
     if "/" in pod_name:
         return pod_name
+    if _POD_NAME_SUFFIX_RE.search(pod_name):
+        return f"pod/{pod_name}"
     return f"deployment/{pod_name}"
 
 
@@ -428,16 +450,22 @@ async def test_message_flow(
     # For Remote flows the producer-side queue is a QREMOTE; for Local
     # flows it's a QLOCAL. amqsput doesn't care — it just PUTs.
     #
-    # The blank line after the payload is the commit-and-exit signal:
-    # amqsput reads lines from stdin until it sees an empty line, then
-    # commits all messages so far and exits. Without it, amqsput may
-    # exit on EOF without ever committing.
+    # amqsput reads ONE LINE per message and commits + exits on EOF
+    # (when subprocess.run closes the stdin pipe). The previous
+    # implementation sent `payload + "\n\n"`, which amqsput interpreted
+    # as: line 1 = payload, line 2 = empty-string message, then EOF.
+    # That put TWO messages on the queue per call: ours and an empty
+    # one. The poll-depth check saw depth>=1 and passed, and FIFO
+    # delivered ours first to amqsget, so the bug was masked — but the
+    # empty message lingered on the queue and would be delivered to
+    # whichever GET came next. Now we send exactly `payload + "\n"`:
+    # one line, then EOF commits.
     rc, put_stdout, put_stderr, put_duration = await _kubectl_exec_with_stdin(
         binary=mq_binary,
         namespace=settings.namespace,
         pod_name=producer_qm_row.pod_name,
         argv=[AMQSPUT_BIN, flow.producer_queue_name, flow.producer_queue_manager],
-        stdin=body.payload + "\n\n",
+        stdin=body.payload + "\n",
         timeout_seconds=min(10.0, body.timeout_seconds),
     )
     put_ok = (rc == 0)
