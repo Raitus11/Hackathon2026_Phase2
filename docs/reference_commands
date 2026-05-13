@@ -53,3 +53,29 @@ target = pod_name if pod_name.startswith("deployment/") or "/" in pod_name else 
 cmd = [binary, "exec", "-i", "-n", namespace, target, "--", *argv]
 
 oc exec -i deployment/qm-wl6eebdj -n roco-dev -- /opt/mqm/samp/bin/amqsget LIY.JUUD.WUTQE.XL21 WL6EEBDJ
+
+
+
+
+
+
+rc, get_stdout, get_stderr, get_duration = await _kubectl_exec_with_stdin(
+    binary=mq_binary,
+    namespace=settings.namespace,
+    pod_name=consumer_qm_row.pod_name,
+    argv=["/opt/mqm/samp/bin/amqsget", flow.consumer_queue_name, flow.consumer_queue_manager],
+    stdin="",
+    timeout_seconds=max(5.0, min(15.0, body.timeout_seconds - put_duration - poll_duration)),
+)
+
+rc, get_stdout, get_stderr, get_duration = await _kubectl_exec_with_stdin(
+    binary=mq_binary,
+    namespace=settings.namespace,
+    pod_name=consumer_qm_row.pod_name,
+    argv=[
+        "bash", "-c",
+        f"/opt/mqm/samp/bin/amqsget {flow.consumer_queue_name} {flow.consumer_queue_manager}"
+    ],
+    stdin="",
+    timeout_seconds=max(5.0, min(15.0, body.timeout_seconds - put_duration - poll_duration)),
+)
