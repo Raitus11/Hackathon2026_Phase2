@@ -1,12 +1,3 @@
-oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'DISPLAY QLOCAL(LIY.JUUD.WUTQE.XL21) ALL' | runmqsc WL6EEBDJ" | Select-String "GET|PUT|CURDEPTH"
+oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'DISPLAY QLOCAL(LIY.JUUD.WUTQE.XL21) ALL' | runmqsc WL6EEBDJ" | Select-String "USAGE|SHARE|DEFSOPT|DEFPRESP|MAXMSGL"
 
-
-oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'ALTER QLOCAL(LIY.JUUD.WUTQE.XL21) GET(ENABLED) PUT(ENABLED)' | runmqsc WL6EEBDJ"
-
-
-
-f"DEFINE QLOCAL('{queue_name}') REPLACE"
-
-f"DEFINE QLOCAL('{queue_name}') GET(ENABLED) PUT(ENABLED) REPLACE"
-
-oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'DISPLAY QLOCAL(LIY.JUUD.WUTQE.XL21) ALL' | runmqsc WL6EEBDJ" | Select-String "GET|PUT|CURDEPTH"
+oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'ALTER QLOCAL(LIY.JUUD.WUTQE.XL21) USAGE(NORMAL)' | runmqsc WL6EEBDJ"
