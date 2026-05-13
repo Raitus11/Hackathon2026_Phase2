@@ -1,0 +1,1 @@
+Invoke-RestMethod "http://localhost:8080/audit?limit=20" | Select-Object -ExpandProperty entries | Where-Object { $_.request_payload.kind -eq "test_message_get" } | Select-Object -Last 1 | ConvertTo-Json -Depth 10
