@@ -1,5 +1,41 @@
-oc exec -i deployment/qm-wl6eebdj -n roco-dev -- bash -c "printf 'MANUAL-TEST\n\n' | /opt/mqm/samp/bin/amqsput LIY.JUUD.WUTQE.XL21 WL6EEBDJ"
+Drain message
+oc exec -i deployment/qm-wl6eebdj -n roco-dev -- /opt/mqm/samp/bin/amqsget LIY.JUUD.WUTQE.XL21 WL6EEBDJ
 
+VErify depth 0
 oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'DISPLAY QLOCAL(LIY.JUUD.WUTQE.XL21) CURDEPTH' | runmqsc WL6EEBDJ" | Select-String "CURDEPTH"
 
-oc exec -i deployment/qm-wl6eebdj -n roco-dev -- /opt/mqm/samp/bin/amqsget LIY.JUUD.WUTQE.XL21 WL6EEBDJ
+In bcl/src/bcl/api/message_flow.py, find
+
+received: str | None = None
+for line in get_stdout.splitlines():
+    line_stripped = line.strip()
+    if line_stripped == body.payload:
+        received = line_stripped
+        break
+# Fallback: a substring search if exact match missed due to amqsget
+# framing variations across MQ versions.
+if received is None and body.payload in get_stdout:
+    received = body.payload
+
+
+Replace
+import re
+
+received: str | None = None
+# amqsget formats each delivered message as: message <PAYLOAD>
+# Extract everything between the angle brackets on lines starting with "message ".
+for line in get_stdout.splitlines():
+    stripped = line.strip()
+    m = re.match(r"^message\s+<(.*)>$", stripped)
+    if m:
+        candidate = m.group(1)
+        if candidate == body.payload:
+            received = candidate
+            break
+        # Keep the first message we saw even if it doesn't match — useful for diagnostics.
+        if received is None:
+            received = candidate
+# Last-ditch: substring search anywhere in stdout.
+if received is None and body.payload in get_stdout:
+    received = body.payload
+
