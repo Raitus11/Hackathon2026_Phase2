@@ -287,6 +287,133 @@ async def _kubectl_exec_with_stdin(
     return rc, out, err, loop.time() - t0
 
 
+async def _kubectl_exec_stream_until(
+    *,
+    binary: str,
+    namespace: str,
+    pod_name: str,
+    argv: list[str],
+    predicate,  # Callable[[str], bool]
+    timeout_seconds: float,
+) -> tuple[int, str, str, float]:
+    """Run `oc exec ... -- ARGV` and stream stdout line-by-line. Terminate
+    the child process as soon as `predicate(line)` returns True; otherwise
+    bail out at `timeout_seconds` wall-time.
+
+    Why this exists: subprocess.run captures stdout via a pipe which is
+    fully buffered (not line-buffered) when stdout is not a TTY. amqsget
+    writes "Sample AMQSGET0 start" and "message <PAYLOAD>" lines, but with
+    a kernel pipe buffer they sit there until the process exits cleanly.
+    If we SIGKILL the child for wall-time reasons, the buffer is dropped
+    and we see empty stdout — even though amqsget already consumed the
+    message (MQGMO_NO_SYNCPOINT autocommits per MQGET). Net result: queue
+    drains, BCL reports "got nothing." This was the demo-day bug.
+
+    Streaming reads each line as it appears and lets us terminate the
+    child the moment we have what we need — turning a 4s wall-bound,
+    empty-stdout failure into a ~200ms clean success.
+
+    Returns (returncode, full_stdout_seen, stderr, duration). returncode
+    is the actual process exit if it exited on its own (rare with kill);
+    -2 when we killed it after match; -1 on timeout with no match.
+    """
+    target = _resolve_pod_target(pod_name)
+    cmd: list[str] = [binary, "exec", "-n", namespace, target, "--", *argv]
+
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+
+    def _do() -> tuple[int, str, str]:
+        # Use Popen with line-buffered text mode. bufsize=1 = line-buffer
+        # on the Python side; the kernel pipe is still chunk-buffered but
+        # amqsget itself line-buffers when stdout is a pipe to a TTY-like
+        # process — `oc exec` allocates a PTY by default for interactive
+        # use, so amqsget's printf calls flush per line.
+        try:
+            proc = subprocess.Popen(  # noqa: S603
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+            )
+        except FileNotFoundError as e:
+            return (-1, "", f"binary not found: {e}")
+        except OSError as e:
+            return (-1, "", f"OS error: {e}")
+
+        collected_out: list[str] = []
+        deadline_mono = t0 + timeout_seconds
+        matched = False
+
+        try:
+            # Read stdout line by line. We cannot use select() on Windows
+            # for pipes, so we rely on readline() with periodic checks
+            # against the deadline. amqsget writes its lines promptly
+            # under PTY allocation; readline returns each line as it
+            # arrives.
+            assert proc.stdout is not None
+            while True:
+                # Bail if deadline already passed before next readline
+                # attempt — readline can block.
+                if loop.time() >= deadline_mono:
+                    break
+                # readline() blocks; in practice amqsget produces output
+                # within ~50ms of pod entry. If readline blocks past the
+                # deadline, we kill the process below.
+                line = proc.stdout.readline()
+                if line == "":
+                    # EOF — process exited on its own.
+                    break
+                collected_out.append(line)
+                if predicate(line):
+                    matched = True
+                    break
+        finally:
+            if proc.poll() is None:
+                # Process still running — terminate it. Use SIGTERM first
+                # so amqsget can flush; if it lingers, SIGKILL.
+                try:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=0.5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait(timeout=1.0)
+                except OSError:
+                    pass
+            # Drain any remaining stdout (small amounts may have arrived
+            # between match and terminate).
+            if proc.stdout is not None:
+                try:
+                    rest = proc.stdout.read()
+                    if rest:
+                        collected_out.append(rest)
+                except OSError:
+                    pass
+            stderr_text = ""
+            if proc.stderr is not None:
+                try:
+                    stderr_text = proc.stderr.read() or ""
+                except OSError:
+                    pass
+
+        if matched:
+            rc = -2  # sentinel: we killed it after match
+        elif proc.returncode is not None:
+            rc = proc.returncode
+        else:
+            rc = -1  # timed out without a match
+
+        return (rc, "".join(collected_out), stderr_text)
+
+    rc, out, err = await loop.run_in_executor(None, _do)
+    return rc, out, err, loop.time() - t0
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Queue-depth probe (uses MqClient to keep one subprocess pathway for MQSC)
 # ─────────────────────────────────────────────────────────────────────────
@@ -818,27 +945,36 @@ async def test_message_flow(
 
     # amqsget reads messages from the queue using MQGET with WAIT
     # (WaitInterval=15000ms) and writes each as `message <PAYLOAD>` to
-    # stdout. It exits on MQRC_NO_MSG_AVAILABLE (2033) after the wait
-    # interval expires with the queue empty. There is no `-w` flag on
-    # the shipped sample, so we bound wall-time via subprocess timeout.
+    # stdout. There is no `-w` flag on the shipped sample.
     #
-    # Sample uses MQGMO_NO_SYNCPOINT by default, which means each MQGET
-    # is auto-committed. Killing the process via SIGKILL after we have
-    # our payload on stdout is safe: the message is already off the
-    # queue. exit_code=-1 from timeout is expected and fine.
+    # CRITICAL: oc exec captures stdout via a pipe; subprocess.run with
+    # capture_output=True fully buffers that pipe. amqsget writes the
+    # message line, MQGET commits it (MQGMO_NO_SYNCPOINT), then sits
+    # idle on the next MQGET — but the line we want is stuck in the
+    # kernel buffer. If we SIGKILL on wall-time, buffer is dropped and
+    # we see empty stdout while the queue is drained. This was the
+    # demo-day bug.
     #
-    # Budget: amqsget delivers our message in the first ~50ms because
-    # poll already confirmed depth>=1, then sits idle for 15s. Capping
-    # at 4s gives plenty of headroom and reclaims the idle wait for
-    # the rest of the demo flow.
+    # Fix: stream stdout line-by-line and terminate amqsget the moment
+    # we see "message <PAYLOAD>". Total wall time goes from 4s-with-
+    # empty-output to ~200ms-with-the-payload.
+    expected_marker = f"message <{body.payload}>"
+    expected_marker_alt = f"message <{body.payload}>"  # exact match used by predicate
+    
+    def _line_has_our_payload(line: str) -> bool:
+        return expected_marker_alt in line
+
     remaining_budget = body.timeout_seconds - put_duration - poll_duration
-    get_timeout = max(2.0, min(4.0, remaining_budget))
-    rc, get_stdout, get_stderr, get_duration = await _kubectl_exec_with_stdin(
+    # Keep a generous ceiling: in pathological cases amqsget takes a few
+    # seconds to start (cold MQI connect, security cache miss). 10s is
+    # plenty given a healthy QM produces output in <100ms.
+    get_timeout = max(2.0, min(10.0, remaining_budget))
+    rc, get_stdout, get_stderr, get_duration = await _kubectl_exec_stream_until(
         binary=mq_binary,
         namespace=settings.namespace,
         pod_name=consumer_qm_row.pod_name,
         argv=[AMQSGET_BIN, flow.consumer_queue_name, flow.consumer_queue_manager],
-        stdin=None,
+        predicate=_line_has_our_payload,
         timeout_seconds=get_timeout,
     )
 
@@ -855,7 +991,7 @@ async def test_message_flow(
     if get_ok:
         get_detail = (
             f"GET from {flow.consumer_queue_name}; payload matched "
-            f"({len(body.payload)} bytes)"
+            f"({len(body.payload)} bytes) in {get_duration*1000:.0f}ms"
         )
         get_err_msg = None
     elif other_message_seen is not None and other_message_seen != body.payload:
@@ -871,14 +1007,13 @@ async def test_message_flow(
         )
     elif rc == -1:
         get_detail = (
-            f"GET from {flow.consumer_queue_name}; amqsget killed at "
-            f"{get_timeout:.1f}s before any message was returned. "
-            f"This is unexpected because poll saw depth>=1. Possible causes: "
-            f"another consumer drained the queue between poll and GET, or "
-            f"amqsget could not authenticate (check MCAUSER on the consumer QM). "
-            f"stderr: {get_stderr[:300]}"
+            f"GET from {flow.consumer_queue_name}; amqsget timed out at "
+            f"{get_timeout:.1f}s without producing our payload. "
+            f"Possible causes: another consumer drained the queue between "
+            f"poll and GET, or amqsget could not authenticate (check MCAUSER "
+            f"on the consumer QM). stderr: {get_stderr[:300]}"
         )
-        get_err_msg = "amqsget produced no output before wall-time bound"
+        get_err_msg = "amqsget produced no matching output within wall-time bound"
     else:
         get_detail = (
             f"GET from {flow.consumer_queue_name}; amqsget exit_code={rc} but "
