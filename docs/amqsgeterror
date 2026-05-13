@@ -18,3 +18,13 @@ EOF"
 oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "runmqsc WL6EEBDJ <<EOF
 CLEAR QLOCAL('WL6ER0C.XMIT')
 EOF"
+
+
+
+oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "runmqsc WL6EEBDJ <<EOF
+STOP CHANNEL('WL6EEBDJ.TO.WL6ER0C')
+CLEAR QLOCAL('WL6ER0C.XMIT')
+START CHANNEL('WL6EEBDJ.TO.WL6ER0C')
+EOF"
+
+oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'DISPLAY QLOCAL(WL6ER0C.XMIT) CURDEPTH' | runmqsc WL6EEBDJ"
