@@ -1,5 +1,7 @@
-Invoke-RestMethod "http://localhost:8080/audit?lamport_min=205&lamport_max=205" -Method GET | ConvertTo-Json -Depth 10
+oc exec deployment/qm-wl6eebdj -n roco-dev -- find /opt/mqm -name "amqsput" -type f 2>$null
 
-Invoke-RestMethod "http://localhost:8080/audit?limit=5" -Method GET | ConvertTo-Json -Depth 10
+oc exec -i deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'PROBE-MANUAL'; echo '' | /opt/mqm/samp/bin/amqsput LIY.JUUD.WUTQE.XL21 WL6EEBDJ"
 
-"PROBE-MANUAL" | oc exec -i deployment/qm-wl6eebdj -n roco-dev -- amqsput LIY.JUUD.WUTQE.XL21 WL6EEBDJ
+"PROBE-MANUAL`n" | oc exec -i deployment/qm-wl6eebdj -n roco-dev -- /opt/mqm/samp/bin/amqsput LIY.JUUD.WUTQE.XL21 WL6EEBDJ
+
+oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'DISPLAY QLOCAL(LIY.JUUD.WUTQE.XL21) CURDEPTH' | runmqsc WL6EEBDJ"
