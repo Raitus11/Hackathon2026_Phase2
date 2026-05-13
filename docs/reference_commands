@@ -1,7 +1,13 @@
-oc exec deployment/qm-wl6eebdj -n roco-dev -- find /opt/mqm -name "amqsput" -type f 2>$null
+argv=["amqsput", flow.producer_queue_name, flow.producer_queue_manager],
 
-oc exec -i deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'PROBE-MANUAL'; echo '' | /opt/mqm/samp/bin/amqsput LIY.JUUD.WUTQE.XL21 WL6EEBDJ"
+argv=["/opt/mqm/samp/bin/amqsput", flow.producer_queue_name, flow.producer_queue_manager],
 
-"PROBE-MANUAL`n" | oc exec -i deployment/qm-wl6eebdj -n roco-dev -- /opt/mqm/samp/bin/amqsput LIY.JUUD.WUTQE.XL21 WL6EEBDJ
 
-oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'DISPLAY QLOCAL(LIY.JUUD.WUTQE.XL21) CURDEPTH' | runmqsc WL6EEBDJ"
+argv=["amqsget", flow.consumer_queue_name, flow.consumer_queue_manager],
+
+argv=["/opt/mqm/samp/bin/amqsget", flow.consumer_queue_name, flow.consumer_queue_manager],
+
+
+stdin=body.payload + "\n",
+
+stdin=body.payload + "\n\n",
