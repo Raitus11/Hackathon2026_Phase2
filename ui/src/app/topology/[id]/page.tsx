@@ -872,10 +872,11 @@ function ProgressRow({ event }: { event: ProvisionEvent }) {
 }
 
 function RealizeProgressRow({ event }: { event: MqRealizeProgressEvent }) {
+  const status = event.status ?? "";
   const isDone =
-    event.status === "APPLIED" || event.status === "SKIPPED_IDEMPOTENT";
-  const isFail = event.status === "FAILED";
-  const isInflight = event.status === "STARTED";
+    status === "APPLIED" || status === "SKIPPED_IDEMPOTENT";
+  const isFail = status === "FAILED";
+  const isInflight = status === "STARTED";
 
   const icon = isFail ? "✗" : isDone ? "✓" : isInflight ? "·" : "·";
   const iconClass = isFail
@@ -884,27 +885,32 @@ function RealizeProgressRow({ event }: { event: MqRealizeProgressEvent }) {
       ? "text-success"
       : "text-fg-subtle";
 
+  const tail =
+    event.amq_code ??
+    event.error?.slice(0, 24) ??
+    (event.timestamp ? event.timestamp.slice(11, 19) : "");
+
   return (
     <div className="grid grid-cols-12 items-center gap-3 border-t border-border-subtle px-3 py-2 text-xs first:border-t-0">
       <span className="col-span-1 text-center font-mono">
         <span className={iconClass}>{icon}</span>
       </span>
       <span className="col-span-2 truncate font-mono text-fg-muted">
-        {event.qm_name}
+        {event.qm_name ?? "—"}
       </span>
       <span className="col-span-2 text-fg-subtle">
         {realizeCommandLabel(event.command_kind)}
       </span>
       <span className="col-span-3 truncate font-mono text-fg">
-        {event.command_name}
+        {event.command_name ?? ""}
       </span>
       <span className="col-span-2">
-        <span className={`pill ${realizeStatusBadge(event.status)}`}>
-          {event.status.toLowerCase()}
+        <span className={`pill ${realizeStatusBadge(status)}`}>
+          {status.toLowerCase()}
         </span>
       </span>
       <span className="col-span-2 truncate text-right font-mono text-fg-subtle">
-        {event.amq_code ?? event.error?.slice(0, 24) ?? event.timestamp.slice(11, 19)}
+        {tail}
       </span>
     </div>
   );

@@ -459,7 +459,8 @@ export function fmtElapsed(startIso: string, endIso: string | null): string {
 }
 
 /** Short label for MqRealize commands ("CHANNEL_SDR" → "SDR channel"). */
-export function realizeCommandLabel(kind: string): string {
+export function realizeCommandLabel(kind: string | null | undefined): string {
+  if (!kind) return "—";
   switch (kind) {
     case "QLOCAL":
       return "local queue";
