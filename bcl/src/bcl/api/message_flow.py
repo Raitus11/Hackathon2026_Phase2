@@ -23,8 +23,20 @@ Implementation notes:
   - `amqsput` and `amqsget` are sample applications shipped with every
     IBM MQ container. They take qm-name and queue-name as args and
     read/write one line of stdin/stdout per message.
-  - We use kubectl exec subprocess pattern (same as MqClient) for the
-    same cross-platform reasons.
+  - We use absolute paths to /opt/mqm/samp/bin/{amqsput,amqsget} because
+    these binaries are not on $PATH inside the IBM MQ container.
+  - amqsput needs a blank line terminator on stdin to commit and exit.
+    We send `payload + "\n\n"`.
+  - amqsget does not read stdin at all; we pass `stdin=None` so the
+    helper omits `-i` and does not open a stdin pipe.
+  - We prefix bare pod names with `deployment/` so `oc exec` resolves
+    to the running pod of the deployment without us having to look up
+    the random pod-name suffix every call.
+  - amqsget wraps each delivered message in angle brackets:
+        message <PAYLOAD>
+    We parse with a regex that matches that exact format.
+  - We use the kubectl exec subprocess pattern (same as MqClient) for
+    the same cross-platform reasons.
   - The full PUT/GET cycle is recorded as a sequence of audit entries
     sharing one correlation_id so the audit-log viewer can show "the
     proof message" as a contiguous block.
@@ -60,6 +72,13 @@ from bcl.provisioning.mq_client import MqClient
 logger = logging.getLogger("bcl.api.message_flow")
 
 router = APIRouter(prefix="/topologies", tags=["message-flow"])
+
+
+# Absolute paths to the IBM MQ sample binaries inside the QM container.
+# These binaries are not on $PATH; we invoke them directly to avoid
+# `executable file not found in $PATH` errors from `oc exec`.
+AMQSPUT_BIN = "/opt/mqm/samp/bin/amqsput"
+AMQSGET_BIN = "/opt/mqm/samp/bin/amqsget"
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -150,22 +169,43 @@ def _find_flow_between(
 ) -> FlowSpec | None:
     """Return the first flow between these two apps, or None.
 
-    Production topologies often have many flows between the same app pair
-    (one per business queue). For a single test message, we want any one
-    of them; the first is fine. Determinism comes from CSV row order.
+    When both Local and Remote flows exist for the same pair we prefer
+    Remote because it exercises XMITQ + channel transmission and is the
+    more interesting validation. Local is fine as a fallback.
     """
+    remote: FlowSpec | None = None
+    local: FlowSpec | None = None
     for f in flows:
         if (
             f.producer_app_id == producer_app_id
             and f.consumer_app_id == consumer_app_id
         ):
-            return f
-    return None
+            if f.flow_type == "Remote" and remote is None:
+                remote = f
+            elif f.flow_type == "Local" and local is None:
+                local = f
+    return remote or local
 
 
 # ─────────────────────────────────────────────────────────────────────────
 # kubectl exec subprocess helpers (same pattern as MqClient)
 # ─────────────────────────────────────────────────────────────────────────
+
+
+def _resolve_pod_target(pod_name: str) -> str:
+    """Prefix bare pod names with `deployment/` so `oc exec` resolves
+    to the running pod of the deployment.
+
+    `oc exec my-pod-name -- ...` requires the exact pod name including
+    the random suffix; `oc exec deployment/my-name -- ...` lets oc
+    pick the running pod for us. Our QueueManager rows store the
+    deployment-style name (e.g. "qm-wl6eebdj"), so we add the prefix
+    here. If a caller already provided a slash form (e.g. "pod/foo"
+    or "deployment/foo") we leave it alone.
+    """
+    if "/" in pod_name:
+        return pod_name
+    return f"deployment/{pod_name}"
 
 
 async def _kubectl_exec_with_stdin(
@@ -177,13 +217,24 @@ async def _kubectl_exec_with_stdin(
     stdin: str | None,
     timeout_seconds: float,
 ) -> tuple[int, str, str, float]:
-    """Run `oc exec -i -n NS POD -- ARGV...`; return (rc, stdout, stderr, duration).
+    """Run `oc exec [-i] -n NS POD -- ARGV...`; return (rc, stdout, stderr, duration).
 
     Mirrors MqClient._do_subprocess: synchronous subprocess.run via
     loop.run_in_executor so we don't trigger the Windows asyncio
     ProactorEventLoop requirement.
+
+    `-i` is added only when stdin is provided (non-None). For commands
+    like amqsget that read no stdin, omitting `-i` lets oc exec close
+    the stdin pipe immediately and avoids spurious hangs on Windows
+    where the empty-input case can leave the child waiting on a pipe
+    that never sees EOF.
     """
-    cmd = [binary, "exec", "-i", "-n", namespace, pod_name, "--", *argv]
+    target = _resolve_pod_target(pod_name)
+    cmd: list[str] = [binary, "exec"]
+    if stdin is not None:
+        cmd.append("-i")
+    cmd += ["-n", namespace, target, "--", *argv]
+
     loop = asyncio.get_running_loop()
     t0 = loop.time()
 
@@ -200,8 +251,11 @@ async def _kubectl_exec_with_stdin(
                 check=False,
             )
             return (proc.returncode, proc.stdout, proc.stderr)
-        except subprocess.TimeoutExpired:
-            return (-1, "", f"timed out after {timeout_seconds}s")
+        except subprocess.TimeoutExpired as e:
+            # Surface any partial output the child produced before the kill.
+            out = e.stdout if isinstance(e.stdout, str) else ""
+            err = e.stderr if isinstance(e.stderr, str) else ""
+            return (-1, out, (err + f"\ntimed out after {timeout_seconds}s").strip())
         except FileNotFoundError as e:
             return (-1, "", f"binary not found: {e}")
         except OSError as e:
@@ -241,6 +295,41 @@ async def _probe_queue_depth(
     if not m:
         return None, result.raw_stdout
     return int(m.group(1)), result.raw_stdout
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# amqsget stdout parsing
+# ─────────────────────────────────────────────────────────────────────────
+
+
+# amqsget formats each delivered message as: `message <PAYLOAD>`
+# Capture whatever is between the angle brackets on a `message ...` line.
+_AMQSGET_MESSAGE_RE = re.compile(r"^message\s+<(.*)>\s*$")
+
+
+def _extract_payload_from_amqsget_stdout(stdout: str, expected: str) -> str | None:
+    """Return the matched payload from amqsget output, or None.
+
+    Strategy in order of preference:
+      1. Find a `message <PAYLOAD>` line where PAYLOAD == expected.
+      2. Fall back to the first `message <...>` line we see (useful for
+         diagnosing: we got *a* message but it wasn't ours).
+      3. Last-ditch substring scan in the raw stdout in case the format
+         changes in a future MQ release.
+    """
+    first_seen: str | None = None
+    for raw_line in stdout.splitlines():
+        m = _AMQSGET_MESSAGE_RE.match(raw_line.strip())
+        if not m:
+            continue
+        candidate = m.group(1)
+        if candidate == expected:
+            return candidate
+        if first_seen is None:
+            first_seen = candidate
+    if expected in stdout:
+        return expected
+    return first_seen
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -338,12 +427,17 @@ async def test_message_flow(
     # Usage: amqsput <queue_name> [<qm_name>]
     # For Remote flows the producer-side queue is a QREMOTE; for Local
     # flows it's a QLOCAL. amqsput doesn't care — it just PUTs.
+    #
+    # The blank line after the payload is the commit-and-exit signal:
+    # amqsput reads lines from stdin until it sees an empty line, then
+    # commits all messages so far and exits. Without it, amqsput may
+    # exit on EOF without ever committing.
     rc, put_stdout, put_stderr, put_duration = await _kubectl_exec_with_stdin(
         binary=mq_binary,
         namespace=settings.namespace,
         pod_name=producer_qm_row.pod_name,
-        argv=["amqsput", flow.producer_queue_name, flow.producer_queue_manager],
-        stdin=body.payload + "\n",
+        argv=[AMQSPUT_BIN, flow.producer_queue_name, flow.producer_queue_manager],
+        stdin=body.payload + "\n\n",
         timeout_seconds=min(10.0, body.timeout_seconds),
     )
     put_ok = (rc == 0)
@@ -473,30 +567,33 @@ async def test_message_flow(
     get_started = datetime.now(UTC)
     get_loop_t0 = asyncio.get_event_loop().time()
 
-    # amqsget reads one message from the named queue and writes it to stdout.
-    # By default it waits 15s for a message before exiting.
+    # amqsget reads one or more messages from the named queue and
+    # writes each as `message <PAYLOAD>` to stdout, then exits on its
+    # own when the queue idles for ~15s (or on signal). It does not
+    # read stdin, so we pass stdin=None which makes the helper omit
+    # `-i` from `oc exec` and not open a stdin pipe at all.
+    #
+    # We give it ~10s of wall budget; amqsget will deliver our message
+    # almost immediately because poll already confirmed depth>=1, then
+    # we wait out its default idle window. The timeout_seconds floor
+    # of 5.0 protects against poll having eaten too much of the budget.
+    remaining_budget = body.timeout_seconds - put_duration - poll_duration
+    get_timeout = max(5.0, min(20.0, remaining_budget))
     rc, get_stdout, get_stderr, get_duration = await _kubectl_exec_with_stdin(
         binary=mq_binary,
         namespace=settings.namespace,
         pod_name=consumer_qm_row.pod_name,
-        argv=["amqsget", flow.consumer_queue_name, flow.consumer_queue_manager],
+        argv=[AMQSGET_BIN, flow.consumer_queue_name, flow.consumer_queue_manager],
         stdin=None,
-        timeout_seconds=min(15.0, body.timeout_seconds - put_duration - poll_duration),
+        timeout_seconds=get_timeout,
     )
-    # amqsget's stdout includes banner + the message line(s). The payload
-    # appears as one of the lines; match by exact equality after stripping.
-    received: str | None = None
-    for line in get_stdout.splitlines():
-        line_stripped = line.strip()
-        if line_stripped == body.payload:
-            received = line_stripped
-            break
-    # Fallback: a substring search if exact match missed due to amqsget
-    # framing variations across MQ versions.
-    if received is None and body.payload in get_stdout:
-        received = body.payload
 
-    get_ok = (rc == 0) and (received is not None)
+    received = _extract_payload_from_amqsget_stdout(get_stdout, body.payload)
+    # amqsget exits 0 even when timing out idle; we treat "got our payload"
+    # as the real success signal, independent of exit code. If we got *some*
+    # message but not ours, that's still useful diagnostic info but it's a
+    # failure for this run.
+    get_ok = (received == body.payload)
 
     audit_row = await write_audit_entry(
         session,
@@ -516,7 +613,10 @@ async def test_message_flow(
             "payload_received": received,
         },
         duration_ms=int(get_duration * 1000),
-        error_message=None if get_ok else (get_stderr[:500] or "payload not found in amqsget stdout"),
+        error_message=(
+            None if get_ok
+            else (get_stderr[:500] or "payload not found in amqsget stdout")
+        ),
     )
     last_lamport = audit_row.lamport_clock
     steps.append(MessageFlowStep(
