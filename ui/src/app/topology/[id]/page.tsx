@@ -1,15 +1,21 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import Link from "next/link";
 import {
   bcl,
   fmtElapsed,
   phaseLabel,
+  realizeCommandLabel,
+  type Application,
+  type MqRealizeProgressEvent,
+  type MqRealizeRun,
   type ProvisionEvent,
   type ProvisionRun,
   type QueueManager,
+  type TestMessageResult,
   type Topology,
 } from "@/lib/bcl-client";
 
@@ -19,6 +25,7 @@ export default function TopologyDetail({
   params: { id: string };
 }) {
   const topologyId = params.id;
+  const router = useRouter();
 
   // ─── data ──────────────────────────────────────────────────
   const {
@@ -32,10 +39,7 @@ export default function TopologyDetail({
   );
 
   // List of all provision runs (most recent first by convention).
-  const {
-    data: runs,
-    mutate: mutateRuns,
-  } = useSWR<ProvisionRun[]>(
+  const { data: runs, mutate: mutateRuns } = useSWR<ProvisionRun[]>(
     `/topologies/${topologyId}/provision`,
     () => bcl.provisioning.listRuns(topologyId),
     { refreshInterval: 5000 },
@@ -48,25 +52,22 @@ export default function TopologyDetail({
     )[0];
   }, [runs]);
 
-  // Live status polling for the currently-tracked run.
-  // Active run = latestRun if RUNNING/PENDING; otherwise no fast-poll.
+  // Live status polling for the currently-tracked provision run.
   const isLive =
     latestRun !== null &&
     (latestRun.state === "PENDING" || latestRun.state === "RUNNING");
 
-  const {
-    data: liveRun,
-    mutate: mutateLiveRun,
-  } = useSWR<ProvisionRun>(
-    isLive ? `/topologies/${topologyId}/provision/${latestRun!.run_id}/status` : null,
+  const { data: liveRun, mutate: mutateLiveRun } = useSWR<ProvisionRun>(
+    isLive
+      ? `/topologies/${topologyId}/provision/${latestRun!.run_id}/status`
+      : null,
     () => bcl.provisioning.status(topologyId, latestRun!.run_id),
     { refreshInterval: 2000 },
   );
 
-  // The run we actually display (prefer live for fresh progress).
   const displayRun: ProvisionRun | null = liveRun ?? latestRun;
 
-  // Audit log scoped to the most recent run's correlation_id.
+  // Audit log scoped to the most recent provision run's correlation_id.
   const correlationId = displayRun?.correlation_id;
   const { data: auditPage } = useSWR(
     correlationId ? `/audit?cid=${correlationId}` : null,
@@ -74,15 +75,60 @@ export default function TopologyDetail({
     { refreshInterval: 3000 },
   );
 
+  // ─── realize-mq-objects data ───────────────────────────────
+  const { data: realizeRuns, mutate: mutateRealizeRuns } = useSWR<
+    MqRealizeRun[]
+  >(
+    `/topologies/${topologyId}/realize-mq-objects`,
+    () => bcl.realize.listRuns(topologyId),
+    { refreshInterval: 5000 },
+  );
+
+  const latestRealize = useMemo<MqRealizeRun | null>(() => {
+    if (!realizeRuns || realizeRuns.length === 0) return null;
+    return [...realizeRuns].sort((a, b) =>
+      a.started_at < b.started_at ? 1 : -1,
+    )[0];
+  }, [realizeRuns]);
+
+  const isRealizeLive =
+    latestRealize !== null &&
+    (latestRealize.state === "PENDING" || latestRealize.state === "RUNNING");
+
+  const { data: liveRealize } = useSWR<MqRealizeRun>(
+    isRealizeLive
+      ? `/topologies/${topologyId}/realize-mq-objects/${latestRealize!.run_id}/status`
+      : null,
+    () => bcl.realize.status(topologyId, latestRealize!.run_id),
+    { refreshInterval: 2000 },
+  );
+
+  const displayRealize: MqRealizeRun | null = liveRealize ?? latestRealize;
+
+  // Applications for the test-message form.
+  const { data: applications } = useSWR<Application[]>(
+    `/topologies/${topologyId}/applications`,
+    () => bcl.topologies.listApps(topologyId),
+    { refreshInterval: 30_000 },
+  );
+
   // ─── actions ───────────────────────────────────────────────
   const [pending, setPending] = useState<
-    "provision" | "dry-run" | "teardown" | null
+    | "provision"
+    | "dry-run"
+    | "teardown-pods"
+    | "realize-apply"
+    | "realize-teardown"
+    | "test-message"
+    | "delete-topology"
+    | null
   >(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [confirmTeardown, setConfirmTeardown] = useState(false);
+  const [confirmTeardownPods, setConfirmTeardownPods] = useState(false);
+  const [confirmRealizeTeardown, setConfirmRealizeTeardown] = useState(false);
+  const [confirmDeleteTopology, setConfirmDeleteTopology] = useState(false);
 
-  // After a run completes, stop polling but force one final refresh
-  // of runs + audit so the UI converges.
+  // After a provision run completes, force one final refresh.
   const lastObservedState = useRef<string | null>(null);
   useEffect(() => {
     if (!displayRun) return;
@@ -95,7 +141,22 @@ export default function TopologyDetail({
     lastObservedState.current = displayRun.state;
   }, [displayRun?.state, mutateRuns, displayRun]);
 
-  async function doStart(dryRun: boolean) {
+  // Same for realize.
+  const lastObservedRealizeState = useRef<string | null>(null);
+  useEffect(() => {
+    if (!displayRealize) return;
+    if (
+      lastObservedRealizeState.current === "RUNNING" &&
+      ["COMPLETED", "FAILED", "PARTIALLY_COMPLETED"].includes(
+        displayRealize.state,
+      )
+    ) {
+      mutateRealizeRuns();
+    }
+    lastObservedRealizeState.current = displayRealize.state;
+  }, [displayRealize?.state, mutateRealizeRuns, displayRealize]);
+
+  async function doProvisionStart(dryRun: boolean) {
     setActionError(null);
     setPending(dryRun ? "dry-run" : "provision");
     try {
@@ -104,8 +165,6 @@ export default function TopologyDetail({
         message: dryRun ? "dry run from UI" : "provision from UI",
         dry_run: dryRun,
       });
-      // Re-fetch the runs list — SWR will pick up the new run and start
-      // live-polling it via the isLive guard above.
       await mutateRuns();
     } catch (err) {
       setActionError(String(err));
@@ -114,14 +173,13 @@ export default function TopologyDetail({
     }
   }
 
-  async function doTeardown() {
+  async function doProvisionTeardown() {
     setActionError(null);
-    setPending("teardown");
+    setPending("teardown-pods");
     try {
       await bcl.provisioning.teardown(topologyId, "operator:raitus");
-      // Teardown is synchronous — refresh everything.
       await Promise.all([mutateRuns(), mutateLiveRun()]);
-      setConfirmTeardown(false);
+      setConfirmTeardownPods(false);
     } catch (err) {
       setActionError(String(err));
     } finally {
@@ -129,16 +187,70 @@ export default function TopologyDetail({
     }
   }
 
+  async function doRealizeApply() {
+    setActionError(null);
+    setPending("realize-apply");
+    try {
+      await bcl.realize.start(topologyId, {
+        actor: "operator:raitus",
+        message: "realize MQ objects from UI",
+      });
+      await mutateRealizeRuns();
+    } catch (err) {
+      setActionError(String(err));
+    } finally {
+      setPending(null);
+    }
+  }
+
+  async function doRealizeTeardown() {
+    setActionError(null);
+    setPending("realize-teardown");
+    try {
+      await bcl.realize.teardown(topologyId, {
+        actor: "operator:raitus",
+        message: "teardown MQ objects from UI",
+      });
+      await mutateRealizeRuns();
+      setConfirmRealizeTeardown(false);
+    } catch (err) {
+      setActionError(String(err));
+    } finally {
+      setPending(null);
+    }
+  }
+
+  async function doDeleteTopology(cascade: boolean) {
+    setActionError(null);
+    setPending("delete-topology");
+    try {
+      await bcl.topologies.delete(topologyId, cascade, "operator:raitus");
+      router.push("/");
+    } catch (err) {
+      setActionError(String(err));
+      setPending(null);
+    }
+  }
+
   // ─── button state machine ──────────────────────────────────
   const provisioned =
     displayRun?.state === "COMPLETED" && (displayRun?.qms_ready ?? 0) > 0;
-  const canStart = !isLive && pending === null;
-  const canTeardown = provisioned && !isLive && pending === null;
+  const canStartProvision = !isLive && pending === null;
+  const canTeardownPods = provisioned && !isLive && pending === null;
+
+  const realized =
+    displayRealize?.direction === "APPLY" &&
+    displayRealize?.state === "COMPLETED";
+  const canRealizeApply =
+    provisioned && !isRealizeLive && pending === null;
+  const canRealizeTeardown =
+    realized && !isRealizeLive && pending === null;
+  const canTestMessage = realized && pending === null;
 
   // ─── render ────────────────────────────────────────────────
   return (
     <main className="mx-auto max-w-6xl px-6 py-8">
-      {/* Header / back link */}
+      {/* Header */}
       <header className="mb-8 border-b border-border-subtle pb-6">
         <Link
           href="/"
@@ -170,8 +282,7 @@ export default function TopologyDetail({
                 <>
                   id <span className="font-mono">#{topology.id}</span> ·{" "}
                   {topology.queue_managers.length} QM
-                  {topology.queue_managers.length === 1 ? "" : "s"} ·
-                  created{" "}
+                  {topology.queue_managers.length === 1 ? "" : "s"} · created{" "}
                   <span className="font-mono">
                     {topology.created_at.slice(0, 10)}
                   </span>
@@ -190,13 +301,13 @@ export default function TopologyDetail({
         </div>
       </header>
 
-      {/* Topology not found */}
+      {/* Not found */}
       {topologyError && !topologyLoading && !topology && (
         <div className="panel p-8 text-center">
           <p className="text-sm text-fg-muted">
             Couldn&apos;t load topology #{topologyId}.
           </p>
-          <p className="mt-1 text-xs text-fg-subtle font-mono">
+          <p className="mt-1 font-mono text-xs text-fg-subtle">
             {String(topologyError)}
           </p>
           <Link
@@ -227,7 +338,12 @@ export default function TopologyDetail({
             ) : (
               <div className="divide-y divide-border-subtle">
                 {topology.queue_managers.map((qm) => (
-                  <QmRow key={qm.id} qm={qm} liveRun={displayRun} />
+                  <QmRow
+                    key={qm.id}
+                    qm={qm}
+                    liveRun={displayRun}
+                    liveRealize={displayRealize}
+                  />
                 ))}
               </div>
             )}
@@ -235,15 +351,17 @@ export default function TopologyDetail({
         </section>
       )}
 
-      {/* Provisioning controls */}
+      {/* Step 1: Provisioning */}
       {topology && (
         <section className="mb-6">
           <div className="panel">
             <div className="flex items-center justify-between border-b border-border-subtle px-4 py-3">
               <div>
-                <h2 className="text-sm font-medium">Provisioning</h2>
+                <h2 className="text-sm font-medium">
+                  Step 1 · Provision QM pods
+                </h2>
                 <p className="mt-0.5 text-xs text-fg-muted">
-                  All actions logged via the BCL with Lamport timestamps.
+                  Deploy one pod per queue manager. Idempotent.
                 </p>
               </div>
               {isLive && (
@@ -254,45 +372,41 @@ export default function TopologyDetail({
               )}
             </div>
 
-            {/* Action buttons */}
             <div className="border-b border-border-subtle px-4 py-3">
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  disabled={!canStart}
-                  onClick={() => doStart(false)}
+                  disabled={!canStartProvision}
+                  onClick={() => doProvisionStart(false)}
                   className={btn(
                     "accent",
-                    !canStart || pending === "provision",
+                    !canStartProvision || pending === "provision",
                   )}
                 >
                   {pending === "provision" ? "Starting…" : "Provision"}
                 </button>
                 <button
                   type="button"
-                  disabled={!canStart}
-                  onClick={() => doStart(true)}
-                  className={btn("ghost", !canStart || pending === "dry-run")}
+                  disabled={!canStartProvision}
+                  onClick={() => doProvisionStart(true)}
+                  className={btn(
+                    "ghost",
+                    !canStartProvision || pending === "dry-run",
+                  )}
                 >
                   {pending === "dry-run" ? "Starting…" : "Dry run"}
                 </button>
                 <button
                   type="button"
-                  disabled={!canTeardown}
-                  onClick={() => setConfirmTeardown(true)}
-                  className={btn("danger", !canTeardown)}
+                  disabled={!canTeardownPods}
+                  onClick={() => setConfirmTeardownPods(true)}
+                  className={btn("danger", !canTeardownPods)}
                 >
-                  Tear down
+                  Tear down pods
                 </button>
-                {actionError && (
-                  <span className="ml-auto max-w-[60%] truncate text-xs text-danger">
-                    {actionError}
-                  </span>
-                )}
               </div>
             </div>
 
-            {/* Current run status */}
             {displayRun ? (
               <RunPanel run={displayRun} />
             ) : (
@@ -311,7 +425,91 @@ export default function TopologyDetail({
         </section>
       )}
 
-      {/* Audit trail scoped to this run */}
+      {/* Step 2: Realize MQ objects */}
+      {topology && (
+        <section className="mb-6">
+          <div className="panel">
+            <div className="flex items-center justify-between border-b border-border-subtle px-4 py-3">
+              <div>
+                <h2 className="text-sm font-medium">
+                  Step 2 · Realize MQ objects
+                </h2>
+                <p className="mt-0.5 text-xs text-fg-muted">
+                  Inside each pod: create queues, channels, XMITQs from CSV.
+                  Idempotent (existing objects skip-not-fail).
+                </p>
+              </div>
+              {isRealizeLive && (
+                <span className="pill text-accent">
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+                  live · 2s
+                </span>
+              )}
+            </div>
+
+            <div className="border-b border-border-subtle px-4 py-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={!canRealizeApply}
+                  onClick={doRealizeApply}
+                  className={btn("accent", !canRealizeApply)}
+                >
+                  {pending === "realize-apply"
+                    ? "Starting…"
+                    : "Realize MQ objects"}
+                </button>
+                <button
+                  type="button"
+                  disabled={!canRealizeTeardown}
+                  onClick={() => setConfirmRealizeTeardown(true)}
+                  className={btn("danger", !canRealizeTeardown)}
+                >
+                  Tear down MQ objects
+                </button>
+                {!provisioned && (
+                  <span className="text-xs text-fg-subtle">
+                    Provision pods first.
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {displayRealize ? (
+              <RealizeRunPanel run={displayRealize} />
+            ) : (
+              <div className="px-4 py-12 text-center">
+                <p className="text-sm text-fg-muted">
+                  No realize runs yet.
+                </p>
+                <p className="mt-1 text-xs text-fg-subtle">
+                  Pods must be ready before MQ objects can be realized inside
+                  them.
+                </p>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
+      {/* Step 3: Test message flow */}
+      {topology && (
+        <section className="mb-6">
+          <TestMessageCard
+            topologyId={topologyId}
+            applications={applications ?? []}
+            enabled={canTestMessage}
+            disabledReason={
+              !realized ? "Realize MQ objects first." : undefined
+            }
+            pending={pending === "test-message"}
+            onPendingChange={(p) => setPending(p ? "test-message" : null)}
+            onError={setActionError}
+          />
+        </section>
+      )}
+
+      {/* Audit trail scoped to the most recent provision run */}
       {displayRun && auditPage && auditPage.entries.length > 0 && (
         <section className="mb-6">
           <div className="panel">
@@ -320,7 +518,8 @@ export default function TopologyDetail({
                 <h2 className="text-sm font-medium">
                   Audit trail{" "}
                   <span className="ml-1 text-xs font-normal text-fg-muted">
-                    ({auditPage.entries.length} entries · Lamport-ordered)
+                    ({auditPage.entries.length} entries · Lamport-ordered ·
+                    correlation_id of most recent provision run)
                   </span>
                 </h2>
                 <p className="mt-0.5 text-xs text-fg-muted">
@@ -362,41 +561,114 @@ export default function TopologyDetail({
         </section>
       )}
 
-      {/* Teardown confirmation modal */}
-      {confirmTeardown && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4"
-          role="dialog"
-          aria-modal="true"
-        >
-          <div className="panel w-full max-w-md p-5">
-            <h3 className="text-base font-semibold">Confirm teardown</h3>
-            <p className="mt-2 text-sm text-fg-muted">
-              This deletes all queue manager pods, services, secrets, and
-              persistent volumes for{" "}
-              <span className="font-medium text-fg">{topology?.name}</span>.
-              The action is audit-logged and cannot be undone from this UI.
-            </p>
-            <div className="mt-5 flex items-center justify-end gap-2">
+      {/* Danger zone */}
+      {topology && (
+        <section className="mb-6">
+          <div className="panel border-danger/30">
+            <div className="border-b border-danger/20 px-4 py-3">
+              <h2 className="text-sm font-medium text-danger">Danger zone</h2>
+              <p className="mt-0.5 text-xs text-fg-muted">
+                Cascade delete: removes MQ objects, then pods, then the
+                topology row. Audit-logged.
+              </p>
+            </div>
+            <div className="flex items-center justify-between px-4 py-3">
+              <p className="text-xs text-fg-muted">
+                Tear down individual layers above first if you want a partial
+                operation.
+              </p>
               <button
                 type="button"
-                onClick={() => setConfirmTeardown(false)}
-                className={btn("ghost", false)}
-                disabled={pending === "teardown"}
+                onClick={() => setConfirmDeleteTopology(true)}
+                disabled={pending !== null}
+                className={btn("danger", pending !== null)}
               >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={doTeardown}
-                className={btn("danger", pending === "teardown")}
-                disabled={pending === "teardown"}
-              >
-                {pending === "teardown" ? "Tearing down…" : "Tear down"}
+                Delete topology (cascade)
               </button>
             </div>
           </div>
+        </section>
+      )}
+
+      {/* Action error banner */}
+      {actionError && (
+        <div className="fixed bottom-4 right-4 z-50 max-w-md rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-xs">
+          <div className="flex items-center justify-between gap-3">
+            <span className="font-medium text-danger">action failed</span>
+            <button
+              onClick={() => setActionError(null)}
+              className="text-fg-subtle hover:text-fg"
+            >
+              ×
+            </button>
+          </div>
+          <p className="mt-1 font-mono text-fg-muted">{actionError}</p>
         </div>
+      )}
+
+      {/* Modals */}
+      {confirmTeardownPods && (
+        <ConfirmModal
+          title="Tear down pods"
+          body={
+            <>
+              This deletes all queue manager pods, services, secrets, and
+              persistent volumes for{" "}
+              <span className="font-medium text-fg">{topology?.name}</span>.
+              The topology row stays. Audit-logged.
+            </>
+          }
+          danger
+          pending={pending === "teardown-pods"}
+          confirmLabel={
+            pending === "teardown-pods" ? "Tearing down…" : "Tear down pods"
+          }
+          onCancel={() => setConfirmTeardownPods(false)}
+          onConfirm={doProvisionTeardown}
+        />
+      )}
+
+      {confirmRealizeTeardown && (
+        <ConfirmModal
+          title="Tear down MQ objects"
+          body={
+            <>
+              This removes all queues, channels, and transmission queues
+              created inside the pods for{" "}
+              <span className="font-medium text-fg">{topology?.name}</span>.
+              Pods stay running. Audit-logged.
+            </>
+          }
+          danger
+          pending={pending === "realize-teardown"}
+          confirmLabel={
+            pending === "realize-teardown"
+              ? "Tearing down…"
+              : "Tear down MQ objects"
+          }
+          onCancel={() => setConfirmRealizeTeardown(false)}
+          onConfirm={doRealizeTeardown}
+        />
+      )}
+
+      {confirmDeleteTopology && (
+        <ConfirmModal
+          title="Delete topology (cascade)"
+          body={
+            <>
+              This will sequentially delete MQ objects → pods → DB row for{" "}
+              <span className="font-medium text-fg">{topology?.name}</span>.
+              Cannot be undone. Audit-logged at every step.
+            </>
+          }
+          danger
+          pending={pending === "delete-topology"}
+          confirmLabel={
+            pending === "delete-topology" ? "Deleting…" : "Delete cascade"
+          }
+          onCancel={() => setConfirmDeleteTopology(false)}
+          onConfirm={() => doDeleteTopology(true)}
+        />
       )}
 
       <footer className="mt-12 border-t border-border-subtle pt-4 text-center text-xs text-fg-subtle">
@@ -412,18 +684,27 @@ export default function TopologyDetail({
 function QmRow({
   qm,
   liveRun,
+  liveRealize,
 }: {
   qm: QueueManager;
   liveRun: ProvisionRun | null;
+  liveRealize: MqRealizeRun | null;
 }) {
-  // Find this QM's most recent progress event in the live run (if any).
-  const event = liveRun?.progress
+  // Find this QM's most recent provision-progress event.
+  const provisionEvent = liveRun?.progress
     .filter((p) => p.qm_name === qm.qm_name)
     .at(-1);
 
-  // Resolved status: prefer the QM's persisted is_ready, then derive from
-  // the latest progress event during an active run.
-  const status = resolveQmStatus(qm, event, liveRun?.state);
+  // Find this QM's most recent realize-progress event.
+  const realizeEvents =
+    liveRealize?.progress.filter((p) => p.qm_name === qm.qm_name) ?? [];
+  const realizeEvent = realizeEvents.at(-1);
+  const realizeApplied = realizeEvents.filter(
+    (e) => e.status === "APPLIED" || e.status === "SKIPPED_IDEMPOTENT",
+  ).length;
+  const realizeTotal = realizeEvent?.commands_total_for_qm ?? 0;
+
+  const status = resolveQmStatus(qm, provisionEvent, liveRun?.state);
 
   return (
     <div className="grid grid-cols-12 items-center gap-3 px-4 py-3 text-xs">
@@ -434,11 +715,16 @@ function QmRow({
       <span className="col-span-2">
         <span className={`pill ${status.text}`}>{status.label}</span>
       </span>
-      <span className="col-span-4 truncate font-mono text-fg-subtle">
+      <span className="col-span-3 truncate font-mono text-fg-subtle">
         {qm.pod_name ?? "—"}
       </span>
       <span className="col-span-2 text-right font-mono text-fg-muted">
-        {qm.listener_port}/{qm.web_port}
+        {realizeTotal > 0
+          ? `${realizeApplied}/${realizeTotal} MQSC`
+          : "—"}
+      </span>
+      <span className="col-span-1 text-right font-mono text-fg-muted">
+        {qm.listener_port}
       </span>
     </div>
   );
@@ -448,7 +734,6 @@ function RunPanel({ run }: { run: ProvisionRun }) {
   const elapsed = fmtElapsed(run.started_at, run.finished_at);
   return (
     <div className="px-4 py-3">
-      {/* Run header */}
       <div className="grid grid-cols-12 items-center gap-3 text-xs">
         <span className="col-span-2">
           <span className={`pill ${stateColor(run.state)}`}>
@@ -477,7 +762,6 @@ function RunPanel({ run }: { run: ProvisionRun }) {
         </div>
       )}
 
-      {/* Progress events */}
       {run.progress.length > 0 ? (
         <div className="mt-4 overflow-hidden rounded-md border border-border-subtle">
           {run.progress.map((p, idx) => (
@@ -493,25 +777,69 @@ function RunPanel({ run }: { run: ProvisionRun }) {
   );
 }
 
+function RealizeRunPanel({ run }: { run: MqRealizeRun }) {
+  const elapsed = fmtElapsed(run.started_at, run.finished_at);
+  return (
+    <div className="px-4 py-3">
+      <div className="grid grid-cols-12 items-center gap-3 text-xs">
+        <span className="col-span-2">
+          <span className={`pill ${stateColor(run.state)}`}>
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${stateDot(run.state)} ${run.state === "RUNNING" ? "animate-pulse" : ""}`}
+            />
+            {run.state.toLowerCase()}
+          </span>
+        </span>
+        <span className="col-span-2 font-mono text-fg">{elapsed}</span>
+        <span className="col-span-3 truncate font-mono text-fg-subtle">
+          {run.direction.toLowerCase()} · {run.run_id.slice(0, 8)}…
+        </span>
+        <span className="col-span-3 font-mono text-fg-muted">
+          {run.commands_applied} applied · {run.commands_skipped_idempotent}{" "}
+          skipped · {run.commands_failed} failed
+        </span>
+        <span className="col-span-2 text-right text-fg-subtle">
+          {run.actor.split(":").pop()}
+        </span>
+      </div>
+
+      {run.error && (
+        <div className="mt-3 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">
+          <span className="font-medium">error · </span>
+          <span className="font-mono">{run.error}</span>
+        </div>
+      )}
+
+      {run.progress.length > 0 ? (
+        <div className="mt-4 overflow-hidden rounded-md border border-border-subtle">
+          {run.progress.slice(-30).map((p, idx) => (
+            <RealizeProgressRow key={idx} event={p} />
+          ))}
+          {run.progress.length > 30 && (
+            <div className="border-t border-border-subtle bg-bg-subtle px-3 py-1.5 text-center text-xs text-fg-subtle">
+              … {run.progress.length - 30} earlier events not shown
+            </div>
+          )}
+        </div>
+      ) : (
+        <p className="mt-4 text-xs text-fg-subtle">
+          Waiting for first command…
+        </p>
+      )}
+    </div>
+  );
+}
+
 function ProgressRow({ event }: { event: ProvisionEvent }) {
   const isDryRun = event.status === "DRY_RUN";
   const isDone =
-    event.status === "APPLIED" ||
-    event.status === "READY" ||
-    isDryRun;
+    event.status === "APPLIED" || event.status === "READY" || isDryRun;
   const isFail =
     event.status === "FAILED" || event.status === "TIMEOUT";
   const isInflight =
     event.status === "APPLYING" || event.status === "WAITING";
 
-  const icon = isFail
-    ? "✗"
-    : isDone
-      ? "✓"
-      : isInflight
-        ? "·"
-        : "·";
-
+  const icon = isFail ? "✗" : isDone ? "✓" : isInflight ? "·" : "·";
   const iconClass = isFail
     ? "text-danger"
     : isDone
@@ -539,6 +867,332 @@ function ProgressRow({ event }: { event: ProvisionEvent }) {
             ? event.error.slice(0, 64) + (event.error.length > 64 ? "…" : "")
             : event.timestamp.slice(11, 19)}
       </span>
+    </div>
+  );
+}
+
+function RealizeProgressRow({ event }: { event: MqRealizeProgressEvent }) {
+  const isDone =
+    event.status === "APPLIED" || event.status === "SKIPPED_IDEMPOTENT";
+  const isFail = event.status === "FAILED";
+  const isInflight = event.status === "STARTED";
+
+  const icon = isFail ? "✗" : isDone ? "✓" : isInflight ? "·" : "·";
+  const iconClass = isFail
+    ? "text-danger"
+    : isDone
+      ? "text-success"
+      : "text-fg-subtle";
+
+  return (
+    <div className="grid grid-cols-12 items-center gap-3 border-t border-border-subtle px-3 py-2 text-xs first:border-t-0">
+      <span className="col-span-1 text-center font-mono">
+        <span className={iconClass}>{icon}</span>
+      </span>
+      <span className="col-span-2 truncate font-mono text-fg-muted">
+        {event.qm_name}
+      </span>
+      <span className="col-span-2 text-fg-subtle">
+        {realizeCommandLabel(event.command_kind)}
+      </span>
+      <span className="col-span-3 truncate font-mono text-fg">
+        {event.command_name}
+      </span>
+      <span className="col-span-2">
+        <span className={`pill ${realizeStatusBadge(event.status)}`}>
+          {event.status.toLowerCase()}
+        </span>
+      </span>
+      <span className="col-span-2 truncate text-right font-mono text-fg-subtle">
+        {event.amq_code ?? event.error?.slice(0, 24) ?? event.timestamp.slice(11, 19)}
+      </span>
+    </div>
+  );
+}
+
+function TestMessageCard({
+  topologyId,
+  applications,
+  enabled,
+  disabledReason,
+  pending,
+  onPendingChange,
+  onError,
+}: {
+  topologyId: string;
+  applications: Application[];
+  enabled: boolean;
+  disabledReason?: string;
+  pending: boolean;
+  onPendingChange: (p: boolean) => void;
+  onError: (e: string | null) => void;
+}) {
+  const [producer, setProducer] = useState("");
+  const [consumer, setConsumer] = useState("");
+  const [payload, setPayload] = useState("PROBE-FROM-UI");
+  const [result, setResult] = useState<TestMessageResult | null>(null);
+
+  // Default to first two apps once loaded.
+  useEffect(() => {
+    if (applications.length > 0 && !producer) {
+      setProducer(applications[0].app_id);
+    }
+    if (applications.length > 1 && !consumer) {
+      setConsumer(applications[1].app_id);
+    }
+  }, [applications, producer, consumer]);
+
+  async function send() {
+    if (!producer || !consumer) return;
+    onError(null);
+    onPendingChange(true);
+    try {
+      const r = await bcl.messageFlow.send(topologyId, {
+        producer_app_id: producer,
+        consumer_app_id: consumer,
+        payload,
+        timeout_seconds: 30,
+      });
+      setResult(r);
+    } catch (err) {
+      onError(String(err));
+    } finally {
+      onPendingChange(false);
+    }
+  }
+
+  return (
+    <div className="panel">
+      <div className="flex items-center justify-between border-b border-border-subtle px-4 py-3">
+        <div>
+          <h2 className="text-sm font-medium">
+            Step 3 · Test message flow
+          </h2>
+          <p className="mt-0.5 text-xs text-fg-muted">
+            End-to-end PUT/GET probe. Producer writes, consumer reads, BCL
+            verifies and audits.
+          </p>
+        </div>
+      </div>
+
+      <div className="grid gap-3 px-4 py-4 sm:grid-cols-12 sm:items-end">
+        <div className="sm:col-span-4">
+          <label className="mb-1 block text-xs uppercase tracking-wider text-fg-subtle">
+            Producer app
+          </label>
+          <select
+            value={producer}
+            onChange={(e) => setProducer(e.target.value)}
+            disabled={!enabled || applications.length === 0}
+            className="block w-full rounded-md border border-border-subtle bg-bg-subtle px-2 py-1.5 text-xs text-fg disabled:opacity-50"
+          >
+            <option value="">— select —</option>
+            {applications.map((a) => (
+              <option key={a.app_id} value={a.app_id}>
+                {a.app_id}
+                {a.app_name ? ` · ${a.app_name}` : ""}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="sm:col-span-4">
+          <label className="mb-1 block text-xs uppercase tracking-wider text-fg-subtle">
+            Consumer app
+          </label>
+          <select
+            value={consumer}
+            onChange={(e) => setConsumer(e.target.value)}
+            disabled={!enabled || applications.length === 0}
+            className="block w-full rounded-md border border-border-subtle bg-bg-subtle px-2 py-1.5 text-xs text-fg disabled:opacity-50"
+          >
+            <option value="">— select —</option>
+            {applications.map((a) => (
+              <option key={a.app_id} value={a.app_id}>
+                {a.app_id}
+                {a.app_name ? ` · ${a.app_name}` : ""}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="sm:col-span-3">
+          <label className="mb-1 block text-xs uppercase tracking-wider text-fg-subtle">
+            Payload
+          </label>
+          <input
+            type="text"
+            value={payload}
+            onChange={(e) => setPayload(e.target.value)}
+            disabled={!enabled}
+            placeholder="text to send"
+            className="block w-full rounded-md border border-border-subtle bg-bg-subtle px-3 py-1.5 text-xs text-fg placeholder:text-fg-subtle focus:border-accent focus:outline-none disabled:opacity-50"
+          />
+        </div>
+
+        <div className="sm:col-span-1">
+          <button
+            type="button"
+            onClick={send}
+            disabled={!enabled || !producer || !consumer || pending}
+            className={btn(
+              "accent",
+              !enabled || !producer || !consumer || pending,
+            )}
+          >
+            {pending ? "…" : "Send"}
+          </button>
+        </div>
+      </div>
+
+      {disabledReason && (
+        <div className="border-t border-border-subtle px-4 py-2">
+          <p className="text-xs text-fg-subtle">{disabledReason}</p>
+        </div>
+      )}
+
+      {result && (
+        <div className="border-t border-border-subtle px-4 py-3">
+          <TestMessageResultPanel result={result} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TestMessageResultPanel({ result }: { result: TestMessageResult }) {
+  return (
+    <div>
+      <div className="grid grid-cols-12 items-center gap-3 text-xs">
+        <span className="col-span-2">
+          <span
+            className={`pill ${
+              result.success ? "text-success" : "text-danger"
+            }`}
+          >
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${
+                result.success ? "bg-success" : "bg-danger"
+              }`}
+            />
+            {result.success ? "delivered" : "failed"}
+          </span>
+        </span>
+        <span className="col-span-2 font-mono text-fg">
+          {result.total_duration_seconds.toFixed(2)}s
+        </span>
+        <span className="col-span-3 truncate font-mono text-fg-muted">
+          {result.flow_kind} · {result.producer_qm}
+          {result.producer_qm !== result.consumer_qm
+            ? ` → ${result.consumer_qm}`
+            : ""}
+        </span>
+        <span className="col-span-3 truncate font-mono text-fg-subtle">
+          {result.producer_app_id} → {result.consumer_app_id}
+        </span>
+        <span className="col-span-2 text-right font-mono text-fg-subtle">
+          {result.audit_lamport_first !== null
+            ? `LC ${result.audit_lamport_first}–${result.audit_lamport_last}`
+            : "—"}
+        </span>
+      </div>
+
+      <div className="mt-3 overflow-hidden rounded-md border border-border-subtle">
+        {result.steps.map((s, idx) => (
+          <div
+            key={idx}
+            className="grid grid-cols-12 items-center gap-3 border-t border-border-subtle px-3 py-2 text-xs first:border-t-0"
+          >
+            <span className="col-span-1 text-center font-mono">
+              <span className={s.success ? "text-success" : "text-danger"}>
+                {s.success ? "✓" : "✗"}
+              </span>
+            </span>
+            <span className="col-span-3 font-mono text-fg">{s.name}</span>
+            <span className="col-span-2 font-mono text-fg-muted">
+              {s.duration_seconds.toFixed(2)}s
+            </span>
+            <span className="col-span-5 truncate font-mono text-fg-subtle">
+              {s.detail}
+            </span>
+            <span className="col-span-1 text-right font-mono text-fg-subtle">
+              {s.audit_lamport !== null ? `LC ${s.audit_lamport}` : "—"}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-4 text-xs">
+        <div>
+          <div className="text-fg-subtle">Sent</div>
+          <div className="mt-1 truncate font-mono text-fg">
+            {result.payload_sent}
+          </div>
+        </div>
+        <div>
+          <div className="text-fg-subtle">
+            Received{" "}
+            {result.payload_matches && (
+              <span className="text-success">· match</span>
+            )}
+            {result.payload_received && !result.payload_matches && (
+              <span className="text-danger">· mismatch</span>
+            )}
+          </div>
+          <div className="mt-1 truncate font-mono text-fg">
+            {result.payload_received ?? "—"}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ConfirmModal({
+  title,
+  body,
+  confirmLabel,
+  danger,
+  pending,
+  onCancel,
+  onConfirm,
+}: {
+  title: string;
+  body: React.ReactNode;
+  confirmLabel: string;
+  danger?: boolean;
+  pending: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4"
+      role="dialog"
+      aria-modal="true"
+    >
+      <div className="panel w-full max-w-md p-5">
+        <h3 className="text-base font-semibold">{title}</h3>
+        <p className="mt-2 text-sm text-fg-muted">{body}</p>
+        <div className="mt-5 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className={btn("ghost", pending)}
+            disabled={pending}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className={btn(danger ? "danger" : "accent", pending)}
+            disabled={pending}
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -578,6 +1232,8 @@ function stateColor(state: string): string {
       return "text-accent";
     case "FAILED":
       return "text-danger";
+    case "PARTIALLY_COMPLETED":
+      return "text-warn";
     default:
       return "text-fg-muted";
   }
@@ -592,6 +1248,8 @@ function stateDot(state: string): string {
       return "bg-accent";
     case "FAILED":
       return "bg-danger";
+    case "PARTIALLY_COMPLETED":
+      return "bg-warn";
     default:
       return "bg-fg-subtle";
   }
@@ -615,6 +1273,21 @@ function statusBadge(status: string): string {
   }
 }
 
+function realizeStatusBadge(status: string): string {
+  switch (status) {
+    case "APPLIED":
+      return "text-success";
+    case "SKIPPED_IDEMPOTENT":
+      return "text-fg-muted";
+    case "STARTED":
+      return "text-warn";
+    case "FAILED":
+      return "text-danger";
+    default:
+      return "text-fg-muted";
+  }
+}
+
 function btn(
   variant: "accent" | "ghost" | "danger",
   disabled: boolean,
@@ -622,8 +1295,7 @@ function btn(
   const base =
     "rounded-md border px-3 py-1.5 text-xs font-medium transition-colors";
   const variants: Record<typeof variant, string> = {
-    accent:
-      "border-accent/40 bg-accent/10 text-accent hover:bg-accent/20",
+    accent: "border-accent/40 bg-accent/10 text-accent hover:bg-accent/20",
     ghost:
       "border-border-subtle bg-bg-subtle text-fg hover:bg-bg-elevated",
     danger:

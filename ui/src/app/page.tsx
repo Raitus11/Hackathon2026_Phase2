@@ -1,20 +1,25 @@
 "use client";
 
+import { useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import Link from "next/link";
 import { bcl } from "@/lib/bcl-client";
 
 export default function Dashboard() {
+  const router = useRouter();
   const { data: health, error: healthError } = useSWR("/health", bcl.health, {
     refreshInterval: 5000,
   });
-  const { data: topologies } = useSWR("/topologies", bcl.topologies.list, {
-    refreshInterval: 10000,
-  });
+  const { data: topologies, mutate: mutateTopologies } = useSWR(
+    "/topologies",
+    bcl.topologies.list,
+    { refreshInterval: 10000 },
+  );
   const { data: audit } = useSWR(
     "/audit",
     () => bcl.audit.list(50, true),
-    { refreshInterval: 3000 }
+    { refreshInterval: 3000 },
   );
 
   // Derived stats
@@ -106,10 +111,16 @@ export default function Dashboard() {
           value={auditTotal}
           sub={`Lamport clock at ${lamport}`}
         />
-        <StatCard
-          label="Migrations"
-          value={0}
-          sub="none running"
+        <StatCard label="Migrations" value={0} sub="none running" />
+      </section>
+
+      {/* CSV ingest */}
+      <section className="mb-4">
+        <CsvIngestCard
+          onIngested={async (topologyId) => {
+            await mutateTopologies();
+            router.push(`/topology/${topologyId}`);
+          }}
         />
       </section>
 
@@ -120,7 +131,7 @@ export default function Dashboard() {
             <div>
               <h2 className="text-sm font-medium">Topologies</h2>
               <p className="mt-0.5 text-xs text-fg-muted">
-                Click to inspect, provision, or tear down.
+                Click to inspect, provision, realize MQ objects, or tear down.
               </p>
             </div>
           </div>
@@ -161,15 +172,7 @@ export default function Dashboard() {
             <div className="px-4 py-12 text-center">
               <p className="text-sm text-fg-muted">No topologies yet.</p>
               <p className="mt-1 text-xs text-fg-subtle">
-                POST one via{" "}
-                <a
-                  href="http://localhost:8080/docs"
-                  target="_blank"
-                  className="text-accent underline-offset-2 hover:underline"
-                >
-                  Swagger UI
-                </a>
-                .
+                Upload a CSV above to ingest one.
               </p>
             </div>
           )}
@@ -221,19 +224,9 @@ export default function Dashboard() {
             </div>
           ) : (
             <div className="px-4 py-12 text-center">
-              <p className="text-sm text-fg-muted">
-                No audit events yet.
-              </p>
+              <p className="text-sm text-fg-muted">No audit events yet.</p>
               <p className="mt-1 text-xs text-fg-subtle">
-                POST a topology via{" "}
-                <a
-                  href="http://localhost:8080/docs"
-                  target="_blank"
-                  className="text-accent underline-offset-2 hover:underline"
-                >
-                  Swagger UI
-                </a>{" "}
-                to populate the log.
+                Ingest a topology to populate the log.
               </p>
             </div>
           )}
@@ -245,11 +238,7 @@ export default function Dashboard() {
             <h2 className="text-sm font-medium">System</h2>
           </div>
           <dl className="space-y-2.5 px-4 py-3 text-xs">
-            <Row
-              label="Status"
-              value={status}
-              valueClass={statusColor}
-            />
+            <Row label="Status" value={status} valueClass={statusColor} />
             <Row
               label="DB reachable"
               value={
@@ -276,17 +265,11 @@ export default function Dashboard() {
             <Row
               label="BCL version"
               value={
-                health === undefined
-                  ? "—"
-                  : `v${health.bcl_version}`
+                health === undefined ? "—" : `v${health.bcl_version}`
               }
               valueClass="font-mono"
             />
-            <Row
-              label="Lamport clock"
-              value={lamport}
-              valueClass="font-mono"
-            />
+            <Row label="Lamport clock" value={lamport} valueClass="font-mono" />
             <Row
               label="MQ pods"
               value={
@@ -313,11 +296,142 @@ export default function Dashboard() {
       {/* Footer */}
       <footer className="mt-12 border-t border-border-subtle pt-4 text-center text-xs text-fg-subtle">
         BCL talks only to MQ. UI talks only to BCL. Every state change
-        Lamport-clocked and audit-logged. Phase 0 foundation.
+        Lamport-clocked and audit-logged.
       </footer>
     </main>
   );
 }
+
+// ──────────── CSV ingest card ────────────
+
+function CsvIngestCard({
+  onIngested,
+}: {
+  onIngested: (topologyId: number) => Promise<void>;
+}) {
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [name, setName] = useState("");
+  const [kind, setKind] = useState<"SOURCE" | "TARGET">("SOURCE");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Auto-fill name from filename if user hasn't typed anything.
+  function onFileChange(f: File | null) {
+    setFile(f);
+    if (f && !name) {
+      const stem = f.name.replace(/\.csv$/i, "");
+      setName(`${stem}-${kind.toLowerCase()}`);
+    }
+  }
+
+  async function submit() {
+    if (!file || !name) return;
+    setError(null);
+    setPending(true);
+    try {
+      const result = await bcl.topologies.ingestCsv({
+        file,
+        name,
+        kind,
+        actor: "operator:raitus",
+      });
+      // Reset
+      setFile(null);
+      setName("");
+      if (fileInput.current) fileInput.current.value = "";
+      // Hand off to caller (refresh list + navigate).
+      await onIngested(result.id);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <div className="panel">
+      <div className="flex items-center justify-between border-b border-border-subtle px-4 py-3">
+        <div>
+          <h2 className="text-sm font-medium">Ingest topology from CSV</h2>
+          <p className="mt-0.5 text-xs text-fg-muted">
+            Header columns: producer_queue_manager, producer_application_id,
+            producer_queue_name, consumer_queue_manager, consumer_application_id,
+            consumer_queue_name, channel_name, flow_type, …
+          </p>
+        </div>
+      </div>
+
+      <div className="grid gap-3 px-4 py-4 sm:grid-cols-12 sm:items-end">
+        <div className="sm:col-span-5">
+          <label className="mb-1 block text-xs uppercase tracking-wider text-fg-subtle">
+            CSV file
+          </label>
+          <input
+            ref={fileInput}
+            type="file"
+            accept=".csv,text/csv"
+            onChange={(e) => onFileChange(e.target.files?.[0] ?? null)}
+            disabled={pending}
+            className="block w-full rounded-md border border-border-subtle bg-bg-subtle px-2 py-1.5 text-xs text-fg file:mr-3 file:rounded file:border-0 file:bg-bg-elevated file:px-3 file:py-1 file:text-xs file:text-fg-muted hover:file:bg-border-subtle disabled:opacity-50"
+          />
+        </div>
+
+        <div className="sm:col-span-4">
+          <label className="mb-1 block text-xs uppercase tracking-wider text-fg-subtle">
+            Topology name
+          </label>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            disabled={pending}
+            placeholder="e.g. ngdc-source-2026q2"
+            className="block w-full rounded-md border border-border-subtle bg-bg-subtle px-3 py-1.5 text-xs text-fg placeholder:text-fg-subtle focus:border-accent focus:outline-none disabled:opacity-50"
+          />
+        </div>
+
+        <div className="sm:col-span-2">
+          <label className="mb-1 block text-xs uppercase tracking-wider text-fg-subtle">
+            Kind
+          </label>
+          <select
+            value={kind}
+            onChange={(e) => setKind(e.target.value as "SOURCE" | "TARGET")}
+            disabled={pending}
+            className="block w-full rounded-md border border-border-subtle bg-bg-subtle px-2 py-1.5 text-xs text-fg focus:border-accent focus:outline-none disabled:opacity-50"
+          >
+            <option value="SOURCE">SOURCE</option>
+            <option value="TARGET">TARGET</option>
+          </select>
+        </div>
+
+        <div className="sm:col-span-1">
+          <button
+            type="button"
+            onClick={submit}
+            disabled={pending || !file || !name}
+            className={`block w-full rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
+              pending || !file || !name
+                ? "cursor-not-allowed border-border-subtle bg-bg-subtle text-fg-subtle opacity-40"
+                : "border-accent/40 bg-accent/10 text-accent hover:bg-accent/20"
+            }`}
+          >
+            {pending ? "…" : "Ingest"}
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="border-t border-border-subtle px-4 py-2">
+          <p className="truncate text-xs text-danger">{error}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ──────────── small helpers ────────────
 
 function StatCard({
   label,
@@ -333,12 +447,8 @@ function StatCard({
       <div className="text-xs uppercase tracking-wider text-fg-subtle">
         {label}
       </div>
-      <div className="mt-2 text-3xl font-semibold tracking-tight">
-        {value}
-      </div>
-      {sub && (
-        <div className="mt-1 text-xs text-fg-muted">{sub}</div>
-      )}
+      <div className="mt-2 text-3xl font-semibold tracking-tight">{value}</div>
+      {sub && <div className="mt-1 text-xs text-fg-muted">{sub}</div>}
     </div>
   );
 }
