@@ -3,3 +3,8 @@ oc exec deployment/qm-wl6er0c -n roco-dev -- bash -c "/opt/mqm/samp/bin/amqsget 
 
 
 oc exec deployment/qm-wl6er0c -n roco-dev -- bash -c "/opt/mqm/samp/bin/amqsget LIY.JUUD.XR21 WL6ER0C" 2>&1 | Select-Object -First 20
+
+oc exec deployment/qm-wl6er0c -n roco-dev -- bash -c "runmqsc WL6ER0C <<EOF
+DISPLAY QLOCAL('LIY.JUUD.XR21')
+DISPLAY QLOCAL(*) WHERE(QUEUE LK 'LIY.*')
+EOF"
