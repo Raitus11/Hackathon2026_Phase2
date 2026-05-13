@@ -560,42 +560,60 @@ async def _probe_xmitq_on_producer(
 # ─────────────────────────────────────────────────────────────────────────
 
 
-# amqsget formats each delivered message as: `message <PAYLOAD>`
-# Capture whatever is between the angle brackets on a `message ...` line.
-_AMQSGET_MESSAGE_RE = re.compile(r"^message\s+<(.*)>\s*$")
+# amqsget formats each delivered message as `message <PAYLOAD>`. Across
+# IBM MQ builds the exact whitespace varies:
+#   * Standard build:        "message <PAYLOAD>"        (one space)
+#   * 9.4.5 container build: "message<PAYLOAD\n>"       (no space; bracket
+#                                                       pair straddles a newline)
+# We tolerate both by:
+#   1. Working against `stdout` as a whole, not line-by-line.
+#   2. Allowing zero-or-more whitespace (including newlines) between
+#      "message" and "<", and inside the bracket pair.
+#
+# Why DOTALL: the closing `>` may be on a different line than the opening
+# `<` on the 9.4.5 build. We need `.` to match newlines.
+#
+# Why the payload pattern is non-greedy: there may be multiple
+# `message<...>` blocks in the same stdout (multi-message delivery); we
+# want each one captured independently, not slurped into one big group.
+_AMQSGET_MESSAGE_RE = re.compile(
+    r"message\s*<\s*(.*?)\s*>",
+    re.DOTALL,
+)
 
 
 def _extract_strict_payload(stdout: str, expected: str) -> str | None:
-    """Return the EXPECTED payload only if a `message <expected>` line
-    is present in stdout. Returns None otherwise.
+    """Return the expected payload iff a `message<...expected...>` block
+    appears in stdout (whitespace-tolerant, multi-line-tolerant).
 
-    Replaces the previous fuzzy extractor which would fall back to the
-    "first message seen" and falsely report success when the queue had
-    stale messages from prior probes. For a validation probe, anything
-    other than an exact match is a failure we need to surface.
+    Replaces the previous line-by-line matcher which assumed amqsget put
+    the whole `<PAYLOAD>` on a single line with a space after `message`.
+    The 9.4.5 container build emits `message<PAYLOAD\\n>` — no space, with
+    the closing `>` on the next line — and the old matcher silently failed.
+    Caught at demo o'clock on 2026-05-14.
     """
-    target_line = f"message <{expected}>"
-    for raw_line in stdout.splitlines():
-        if raw_line.strip() == target_line:
-            return expected
-        # Also accept the case where amqsget's output has trailing
-        # whitespace before the close-bracket parse.
-        m = _AMQSGET_MESSAGE_RE.match(raw_line.strip())
-        if m and m.group(1) == expected:
+    for raw_payload in _AMQSGET_MESSAGE_RE.findall(stdout):
+        # Whitespace inside the bracket pair (typically a single newline
+        # injected by amqsget on this build) is not part of the payload.
+        # We compare on the trimmed value but ALSO accept exact-match
+        # against the raw, in case a future build legitimately emits
+        # padding the user actually sent.
+        if raw_payload == expected or raw_payload.strip() == expected:
             return expected
     return None
 
 
 def _extract_first_message(stdout: str) -> str | None:
-    """Return the first `message <...>` payload found in stdout, or
-    None. Used purely for diagnostics: when we did NOT get the
-    expected message, what DID we get? Helps the operator distinguish
-    'queue was empty' from 'queue had a stale message'.
+    """Return the first `message<...>` payload found in stdout (whitespace-
+    and newline-trimmed), or None.
+
+    Used purely for diagnostics: when we did NOT get the expected message,
+    what DID we get? Helps the operator distinguish 'queue was empty' from
+    'queue had a stale message'.
     """
-    for raw_line in stdout.splitlines():
-        m = _AMQSGET_MESSAGE_RE.match(raw_line.strip())
-        if m:
-            return m.group(1)
+    m = _AMQSGET_MESSAGE_RE.search(stdout)
+    if m:
+        return m.group(1).strip()
     return None
 
 
@@ -958,11 +976,27 @@ async def test_message_flow(
     # Fix: stream stdout line-by-line and terminate amqsget the moment
     # we see "message <PAYLOAD>". Total wall time goes from 4s-with-
     # empty-output to ~200ms-with-the-payload.
-    expected_marker = f"message <{body.payload}>"
-    expected_marker_alt = f"message <{body.payload}>"  # exact match used by predicate
-    
+    # amqsget's emit pattern for one message can span multiple lines on
+    # the 9.4.5 build: `message<PAYLOAD\n>\n`. A line-by-line predicate
+    # cannot see the whole match because the `<` and `>` arrive on
+    # different readline() calls. We accumulate stdout in a closure and
+    # match against the same whitespace+newline-tolerant regex used by
+    # the post-hoc extractors. The predicate fires the moment the regex
+    # finds the expected payload in the buffer so we can SIGTERM amqsget
+    # immediately and reclaim the wall-time we'd otherwise spend in its
+    # 15s idle wait.
+    _stdout_buffer: list[str] = []
+
     def _line_has_our_payload(line: str) -> bool:
-        return expected_marker_alt in line
+        _stdout_buffer.append(line)
+        # Only scan the trailing window to keep cost O(1) per call. The
+        # marker we want is at most ~one message worth of bytes, so 4KB
+        # is generous.
+        joined = "".join(_stdout_buffer)[-4096:]
+        for raw_payload in _AMQSGET_MESSAGE_RE.findall(joined):
+            if raw_payload == body.payload or raw_payload.strip() == body.payload:
+                return True
+        return False
 
     remaining_budget = body.timeout_seconds - put_duration - poll_duration
     # Keep a generous ceiling: in pathological cases amqsget takes a few
