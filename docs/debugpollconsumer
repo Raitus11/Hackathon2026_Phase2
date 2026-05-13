@@ -1,26 +1,20 @@
-$pod="deployment/qm-wl6eebdj"; $qm="WL6EEBDJ"; $ns="roco-dev"
-oc exec $pod -n $ns -- bash -c "runmqsc $qm <<EOF
-DISPLAY CHSTATUS('WL6EEBDJ.TO.WL6ER0C') ALL
-DISPLAY CHANNEL('WL6EEBDJ.TO.WL6ER0C') CONNAME XMITQ MCAUSER
+oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "runmqsc WL6EEBDJ <<EOF
+DEFINE CHANNEL('WL6EEBDJ.TO.WL6ER0C') CHLTYPE(SDR) CONNAME('qm-wl6er0c.roco-dev.svc.cluster.local(1414)') XMITQ('WL6ER0C.XMIT') TRPTYPE(TCP) REPLACE
 EOF"
 
+oc exec deployment/qm-wl6er0c -n roco-dev -- bash -c "runmqsc WL6ER0C <<EOF
+DEFINE CHANNEL('WL6EEBDJ.TO.WL6ER0C') CHLTYPE(RCVR) TRPTYPE(TCP) MCAUSER('mqm') REPLACE
+EOF"
 
-  # 1. Find consumer service name
-oc get svc -n roco-dev | findstr wl6er0c
-
-# 2. Update CONNAME on producer (replace <svc-name> with what step 1 returned)
 oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "runmqsc WL6EEBDJ <<EOF
-ALTER CHANNEL('WL6EEBDJ.TO.WL6ER0C') CHLTYPE(SDR) CONNAME('<svc-name>.roco-dev.svc.cluster.local(1414)')
 START CHANNEL('WL6EEBDJ.TO.WL6ER0C')
 EOF"
 
-
-  # On consumer QM — disable CHLAUTH temporarily to confirm
-oc exec deployment/qm-wl6er0c -n roco-dev -- bash -c "runmqsc WL6ER0C <<EOF
-ALTER QMGR CHLAUTH(DISABLED)
-REFRESH SECURITY TYPE(CONNAUTH)
+oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "runmqsc WL6EEBDJ <<EOF
+START CHANNEL('WL6EEBDJ.TO.WL6ER0C')
 EOF"
 
-  oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'DISPLAY QLOCAL(WL6ER0C.XMIT) CURDEPTH' | runmqsc WL6EEBDJ"
-
-  
+oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "runmqsc WL6EEBDJ <<EOF
+DISPLAY CHSTATUS('WL6EEBDJ.TO.WL6ER0C') STATUS SUBSTATE
+DISPLAY QLOCAL('WL6ER0C.XMIT') CURDEPTH
+EOF"
