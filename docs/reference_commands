@@ -44,3 +44,12 @@ if received is None and body.payload in get_stdout:
 
 
 Get-Content bcl\src\bcl\api\message_flow.py | Select-String -Pattern "_kubectl_exec_with_stdin|def _kubectl" -Context 0,25
+
+Invoke-RestMethod "http://localhost:8080/topologies/5/queue-managers" | ConvertTo-Json -Depth 5 | Out-File qm.json ; notepad qm.json
+
+cmd = [binary, "exec", "-i", "-n", namespace, pod_name, "--", *argv]
+
+target = pod_name if pod_name.startswith("deployment/") or "/" in pod_name else f"deployment/{pod_name}"
+cmd = [binary, "exec", "-i", "-n", namespace, target, "--", *argv]
+
+oc exec -i deployment/qm-wl6eebdj -n roco-dev -- /opt/mqm/samp/bin/amqsget LIY.JUUD.WUTQE.XL21 WL6EEBDJ
