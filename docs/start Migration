@@ -1,0 +1,5 @@
+findstr /S /I /N /C:"migration" D:\Hackathon2026Phase2\intelliai2doto\bcl\src\bcl\api\*.py
+
+findstr /S /I /N /C:"migration" /C:"migrate" D:\Hackathon2026Phase2\intelliai2doto\ui\src\app\topology\[id]\page.tsx
+
+Get-ChildItem -Recurse D:\Hackathon2026Phase2\intelliai2doto\bcl\src\bcl\migration\
