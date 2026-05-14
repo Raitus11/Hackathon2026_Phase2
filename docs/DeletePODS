@@ -1,0 +1,20 @@
+# 1. Delete deployments FIRST. This terminates pods, which releases PVC mounts.
+oc delete deployment -l intelliai2doto/owner=bcl -n roco-dev
+
+# 2. Wait for pods to actually go away. Otherwise PVC delete blocks on attached mounts.
+oc get pods -n roco-dev
+# Re-run until no qm-* pods listed (~15-30s)
+
+# 3. Now safe to delete PVCs (Pending until pods gone, but now they go away clean)
+oc delete pvc -l intelliai2doto/owner=bcl -n roco-dev
+
+# 4. Services and secrets — order doesn't matter, nothing references them once pods are gone
+oc delete svc -l intelliai2doto/owner=bcl -n roco-dev
+oc delete secret -l intelliai2doto/owner=bcl -n roco-dev
+
+
+oc get deployment,pvc,secret,svc -l intelliai2doto/owner=bcl -n roco-dev
+# Expect: "No resources found"
+
+oc get pods -n roco-dev
+# Expect: only non-MQ pods (like qm-1-786f8968f4-xbnkm if that's something else, or nothing)
