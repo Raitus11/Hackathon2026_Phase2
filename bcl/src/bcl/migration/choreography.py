@@ -70,6 +70,7 @@ References:
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from typing import Iterable
 
@@ -85,18 +86,35 @@ from bcl.models.orm import AuditOperation
 def bridge_channel_name(source_qm: str, target_qm: str) -> str:
     """Canonical SDR/RCVR pair name for the source -> target bridge.
 
-    MQSC requires the SDR and the matching RCVR to share a name. We
-    use `<SRC>.TO.<TGT>` which mirrors the existing realize-engine's
-    output for cross-QM channels and stays within the 48-char MQ
-    name limit for all our QM names.
+    MQSC requires the SDR and matching RCVR to share a name.
+
+    **MQ channel names are capped at 20 characters** (per IBM MQ 9.4 docs;
+    distinct from the 48-char limit that applies to other MQ objects). We
+    therefore can't always use the readable ``<SRC>.TO.<TGT>`` form.
+
+    Strategy (deterministic, audit-stable):
+      1. If ``<SRC>.TO.<TGT>`` fits, use it — matches existing realize-engine
+         convention for cross-QM channels.
+      2. Otherwise produce ``<SRC[:8]>.<TGT[:6]>.<HHHH>`` where HHHH is the
+         first 4 hex chars of sha1(source|target). 8+1+6+1+4 = 20 chars
+         exactly. The hash suffix guarantees uniqueness across all pairs
+         even when truncation collides on the readable prefix.
+
+    Determinism matters: the rollback engine looks up the same channel by
+    re-deriving the name from (source_qm, target_qm), so this function MUST
+    be a pure function of its inputs.
     """
-    name = f"{source_qm}.TO.{target_qm}"
-    if len(name) > 48:
-        # Pathological but defensive: truncate the source side, keep
-        # target intact (the demo's QM names are well under the limit
-        # so this branch should not trigger for our data).
-        remaining = 48 - len(f".TO.{target_qm}")
-        name = f"{source_qm[:remaining]}.TO.{target_qm}"
+    preferred = f"{source_qm}.TO.{target_qm}"
+    if len(preferred) <= 20:
+        return preferred
+
+    # Truncate with a short hash suffix for collision resistance.
+    h = hashlib.sha1(f"{source_qm}|{target_qm}".encode()).hexdigest()[:4].upper()
+    src_trunc = source_qm[:8]
+    tgt_trunc = target_qm[:6]
+    name = f"{src_trunc}.{tgt_trunc}.{h}"
+    # Defensive — should never trip given the layout above.
+    assert len(name) <= 20, f"bridge channel name too long: {name!r}"
     return name
 
 
