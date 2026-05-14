@@ -92,3 +92,9 @@ EOF"
 Start-Sleep 5
 oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'DISPLAY CHSTATUS(*) STATUS' | runmqsc WL6EEBDJ"
 
+
+--------------
+
+
+oc get deployment,pvc,secret,svc -l intelliai2doto/owner=bcl -n roco-dev
+
