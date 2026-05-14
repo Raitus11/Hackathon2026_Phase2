@@ -243,7 +243,12 @@ def _build_qlocal(queue_name: str, *, flow_indices: tuple[int, ...]) -> MqscComm
     )
 
 
-def _build_qxmit(xmitq_name: str, *, flow_indices: tuple[int, ...]) -> MqscCommand:
+def _build_qxmit(
+    xmitq_name: str,
+    *,
+    flow_indices: tuple[int, ...],
+    trigger_channel_name: str | None = None,
+) -> MqscCommand:
     """Define a transmission queue (QLOCAL with USAGE(XMITQ)).
 
     The XMITQ is the producer-side staging queue. A sender channel reads
@@ -251,18 +256,49 @@ def _build_qxmit(xmitq_name: str, *, flow_indices: tuple[int, ...]) -> MqscComma
     channel on the consumer side, which puts them on the destination
     local queue. Reference: IBM MQ docs, "Transmission queues",
     https://www.ibm.com/docs/en/ibm-mq/9.4?topic=queues-transmission
+
+    Trigger attributes are set when `trigger_channel_name` is provided.
+    Triggering means: when a message arrives on this XMITQ and the SDR
+    channel isn't running, the QM writes a trigger message to
+    SYSTEM.CHANNEL.INITQ which causes the channel initiator to fire
+    `START CHANNEL(<trigger_channel_name>)`. Without this, an INACTIVE
+    SDR never wakes up on its own and the XMITQ piles up forever — the
+    classic "message stuck in transmission" failure. We also emit an
+    explicit START CHANNEL after DEFINE CHANNEL (see step 7 of
+    derive_mqsc_for_qm) as belt-and-braces; either alone is sufficient
+    for the happy path, both together is robust to channel stops.
+    Reference: IBM MQ docs, "Triggering channels",
+    https://www.ibm.com/docs/en/ibm-mq/9.4?topic=channels-triggering
     """
+    if trigger_channel_name is not None:
+        mqsc_text = (
+            f"DEFINE QLOCAL({_mq_quote(xmitq_name)}) USAGE(XMITQ) "
+            f"TRIGGER TRIGTYPE(FIRST) "
+            f"INITQ('SYSTEM.CHANNEL.INITQ') "
+            f"TRIGDATA({_mq_quote(trigger_channel_name)}) "
+            f"REPLACE"
+        )
+        rationale = (
+            "Transmission queue staging messages for a sender channel, "
+            f"with trigger firing channel {trigger_channel_name} on first "
+            f"message. Required by source CSV flow(s) {list(flow_indices)}."
+        )
+    else:
+        # Fallback: XMITQ with no associated channel (shouldn't happen in
+        # practice for Remote flows — kept for defensive completeness).
+        mqsc_text = (
+            f"DEFINE QLOCAL({_mq_quote(xmitq_name)}) USAGE(XMITQ) REPLACE"
+        )
+        rationale = (
+            "Transmission queue staging messages for a sender channel. "
+            f"Required by source CSV flow(s) {list(flow_indices)}."
+        )
     return MqscCommand(
         op_kind=AuditOperation.MQSC_DEFINE_QXMIT,
         object_kind="QXMIT",
         object_name=xmitq_name,
-        mqsc_text=(
-            f"DEFINE QLOCAL({_mq_quote(xmitq_name)}) USAGE(XMITQ) REPLACE"
-        ),
-        rationale=(
-            "Transmission queue staging messages for a sender channel. "
-            f"Required by source CSV flow(s) {list(flow_indices)}."
-        ),
+        mqsc_text=mqsc_text,
+        rationale=rationale,
         rollback_text=f"DELETE QLOCAL({_mq_quote(xmitq_name)})",
         related_flows=flow_indices,
     )
@@ -335,6 +371,53 @@ def _build_channel_sdr(
             f"Required by source CSV flow(s) {list(flow_indices)}."
         ),
         rollback_text=f"DELETE CHANNEL({_mq_quote(channel_name)})",
+        related_flows=flow_indices,
+    )
+
+
+def _build_channel_sdr_start(
+    channel_name: str,
+    *,
+    flow_indices: tuple[int, ...],
+) -> MqscCommand:
+    """Emit `START CHANNEL` for a freshly-defined SDR.
+
+    DEFINE CHANNEL creates the SDR definition; it does NOT start the
+    channel. An SDR sits in STATUS(INACTIVE) until either:
+      (a) it is explicitly started, or
+      (b) a triggered XMITQ fires a trigger message (handled by the
+          TRIGGER attributes set in _build_qxmit).
+
+    We do both, belt-and-braces. Without START CHANNEL here, the first
+    message put to the XMITQ before the channel is started ends up
+    pending forever — the user-facing 'message stuck in transmission'
+    failure observed 2026-05-14.
+
+    We re-use the MQSC_DEFINE_CHANNEL_SDR audit op kind: the audit row's
+    `mqsc_text` makes the START intent unambiguous in the audit log
+    without requiring an orm.py migration mid-demo-week to add a new
+    MQSC_START_CHANNEL enum member. If we ever add that enum value,
+    flip this to use it.
+
+    Rollback: STOP CHANNEL rather than DELETE — the START is inverted by
+    a STOP, not by deleting the channel (which the SDR DEFINE rollback
+    already handles).
+
+    Idempotency: STARTing an already-running channel returns AMQ9508
+    "channel already started" — _is_idempotent_success in mq_realize
+    must include this code or the START succeeds-but-not-counted.
+    """
+    return MqscCommand(
+        op_kind=AuditOperation.MQSC_DEFINE_CHANNEL_SDR,
+        object_kind="CHANNEL_SDR",
+        object_name=channel_name,
+        mqsc_text=f"START CHANNEL({_mq_quote(channel_name)})",
+        rationale=(
+            f"Start the SDR channel so it transitions INACTIVE -> RUNNING. "
+            f"Without this, the XMITQ accumulates messages with no consumer. "
+            f"Required by source CSV flow(s) {list(flow_indices)}."
+        ),
+        rollback_text=f"STOP CHANNEL({_mq_quote(channel_name)})",
         related_flows=flow_indices,
     )
 
@@ -579,10 +662,26 @@ def derive_mqsc_for_qm(
             )
         )
 
-    # 5. XMITQs, sorted
+    # Build a reverse index from XMITQ name -> the SDR channel that
+    # reads from it. We need this to set TRIGGER attributes on each
+    # XMITQ pointing to the correct channel via TRIGDATA. One XMITQ
+    # feeds exactly one SDR (any other configuration is malformed; the
+    # SDR-channel-reuse warning above flags it).
+    xmitq_to_channel: dict[str, str] = {}
+    for cname, (xmitq, _peer_qm, _fi) in sender_channels.items():
+        # If multiple channels claim the same XMITQ (malformed CSV), the
+        # warning was already recorded above. Keep first-seen binding,
+        # matching the SDR conflict-resolution policy.
+        xmitq_to_channel.setdefault(xmitq, cname)
+
+    # 5. XMITQs, sorted, each with TRIGGER pointing at its SDR
     for xname in sorted(transmit_queues):
         commands.append(
-            _build_qxmit(xname, flow_indices=tuple(sorted(transmit_queues[xname])))
+            _build_qxmit(
+                xname,
+                flow_indices=tuple(sorted(transmit_queues[xname])),
+                trigger_channel_name=xmitq_to_channel.get(xname),
+            )
         )
 
     # 6. QREMOTEs, sorted by name
@@ -598,7 +697,12 @@ def derive_mqsc_for_qm(
             )
         )
 
-    # 7. SDR channels, sorted by name
+    # 7. SDR channels, sorted by name. Each SDR gets DEFINE followed
+    #    immediately by START. The START is what turns the channel from
+    #    INACTIVE to RUNNING; without it the XMITQ accumulates messages
+    #    with no consumer (the demo-day 'message stuck in transmission'
+    #    failure). The DEFINE+START pair is emitted contiguously so the
+    #    audit log shows the intent inline.
     for cname in sorted(sender_channels):
         xmitq, peer_qm, fi = sender_channels[cname]
         conname = compute_conname(
@@ -609,6 +713,12 @@ def derive_mqsc_for_qm(
                 cname,
                 xmitq=xmitq,
                 conname=conname,
+                flow_indices=tuple(sorted(fi)),
+            )
+        )
+        commands.append(
+            _build_channel_sdr_start(
+                cname,
                 flow_indices=tuple(sorted(fi)),
             )
         )

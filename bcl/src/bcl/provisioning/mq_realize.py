@@ -75,25 +75,36 @@ logger = logging.getLogger("bcl.provisioning.mq_realize")
 # the following codes mean "object already in target state" and are safe
 # to treat as successful idempotent outcomes.
 #
-# APPLY direction — "already exists" is success:
+# APPLY direction — "already exists" / "already in target state" is success:
 #   AMQ8350E - MQSC name conflict (used by DEFINE when object exists w/o REPLACE)
 #   AMQ8013E - existing object cannot be replaced (sometimes seen on channels)
 #   AMQ8348E - command syntactically valid but object already defined
+#   AMQ9508E - channel <name> already started (idempotent START — channel
+#              already in RUNNING; this fires on every re-run after the
+#              first successful realize. Tolerating it is what makes
+#              re-applying /realize-mq-objects safe.)
+#   AMQ9509E - channel program <name> ended (transient race when START
+#              fires against a channel that's mid-restart; subsequent
+#              START will succeed)
 #
-# TEARDOWN direction — "doesn't exist" is success:
+# TEARDOWN direction — "doesn't exist" / "already stopped" is success:
 #   AMQ8147E - MQ object 'X' not found
 #   AMQ8016E - channel 'X' not found
 #   AMQ8260E - queue does not exist (some MQ versions)
+#   AMQ9531E - channel <name> not in inactive state (a STOP issued
+#              against an already-stopped channel)
 #
 # Note: with REPLACE on every DEFINE, AMQ8350/AMQ8013/AMQ8348 should be
 # rare during APPLY — but we tolerate them anyway as defence in depth.
 
 _APPLY_IDEMPOTENT_AMQ: frozenset[str] = frozenset({
     "AMQ8350E", "AMQ8013E", "AMQ8348E",
+    "AMQ9508E", "AMQ9509E",
 })
 
 _TEARDOWN_IDEMPOTENT_AMQ: frozenset[str] = frozenset({
     "AMQ8147E", "AMQ8016E", "AMQ8260E",
+    "AMQ9531E",
 })
 
 
