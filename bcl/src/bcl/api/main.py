@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from bcl import __version__
-from bcl.api import audit, health, message_flow, provisioning, topology
+from bcl.api import audit, health, message_flow, migration, provisioning, topology
 from bcl.audit.lamport import LamportClock
 from bcl.audit.middleware import CorrelationIdMiddleware
 from bcl.config import get_settings
@@ -68,6 +68,7 @@ def create_app() -> FastAPI:
     app.include_router(topology.router)
     app.include_router(provisioning.router)
     app.include_router(message_flow.router)
+    app.include_router(migration.router)
     app.include_router(audit.router)
 
     @app.get("/", include_in_schema=False)

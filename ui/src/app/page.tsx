@@ -41,6 +41,20 @@ export default function Dashboard() {
   const auditTotal = audit?.total_count ?? audit?.entries.length ?? 0;
   const lamport = health?.lamport_clock ?? "—";
 
+  // Live migration count for the stat card.
+  const { data: migrations } = useSWR(
+    "/migrations",
+    () => bcl.migrations.list(),
+    { refreshInterval: 5000 },
+  );
+  const migrationsTotal = migrations?.length ?? 0;
+  const migrationsLive = (migrations ?? []).filter(
+    (m) =>
+      m.state !== "COMPLETED" &&
+      m.state !== "ROLLED_BACK" &&
+      m.state !== "ROLLBACK_FAILED",
+  ).length;
+
   return (
     <main className="mx-auto max-w-6xl px-6 py-8">
       {/* Header */}
@@ -111,7 +125,19 @@ export default function Dashboard() {
           value={auditTotal}
           sub={`Lamport clock at ${lamport}`}
         />
-        <StatCard label="Migrations" value={0} sub="none running" />
+        <Link href="/migrations" className="block transition-opacity hover:opacity-80">
+          <StatCard
+            label="Migrations"
+            value={migrationsTotal}
+            sub={
+              migrationsTotal === 0
+                ? "none running"
+                : migrationsLive > 0
+                  ? `${migrationsLive} live · ${migrationsTotal - migrationsLive} done`
+                  : `${migrationsTotal} complete`
+            }
+          />
+        </Link>
       </section>
 
       {/* CSV ingest */}

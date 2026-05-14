@@ -123,7 +123,7 @@ export interface TeardownResult {
   details: unknown[];
 }
 
-// ────────── MQ Object Realization (NEW) ──────────
+// ────────── MQ Object Realization ──────────
 
 export type MqRealizeState =
   | "PENDING"
@@ -180,7 +180,7 @@ export interface MqRealizeStartRequest {
   dry_run?: boolean;
 }
 
-// ────────── Test Message Flow (NEW) ──────────
+// ────────── Test Message Flow ──────────
 
 export interface MessageFlowStep {
   name: string;
@@ -218,7 +218,7 @@ export interface TestMessageResult {
   audit_lamport_last: number | null;
 }
 
-// ────────── Applications (NEW — needed for the test-message form) ──────────
+// ────────── Applications ──────────
 
 export interface Application {
   app_id: string;
@@ -226,10 +226,190 @@ export interface Application {
   neighbourhood: string | null;
 }
 
-// ────────── CSV Ingest (NEW) ──────────
+// ────────── CSV Ingest ──────────
 
 export interface CsvIngestResponse extends Topology {
   // Same shape as Topology (created via the ingest endpoint).
+}
+
+// ────────── Migration (NEW — Phase 2 migration workstream) ──────────
+
+/**
+ * Migration state machine, mirrors backend MigrationState enum.
+ * Forward path runs PLANNED → PROVISIONING_TARGET_QM → VALIDATING_PRE
+ * → REWIRING → DRAIN_WAIT → VALIDATING_DURING → DRAINING_SOURCE
+ * → VALIDATING_POST → COMPLETED.
+ * Failure path is <state> → ROLLING_BACK → ROLLED_BACK | ROLLBACK_FAILED.
+ */
+export type MigrationState =
+  | "PLANNED"
+  | "PROVISIONING_TARGET_QM"
+  | "VALIDATING_PRE"
+  | "REWIRING"
+  | "DRAIN_WAIT"
+  | "VALIDATING_DURING"
+  | "DRAINING_SOURCE"
+  | "VALIDATING_POST"
+  | "COMPLETED"
+  | "ROLLING_BACK"
+  | "ROLLED_BACK"
+  | "ROLLBACK_FAILED";
+
+/** Ordered linear path through forward states. Used by the stepper. */
+export const FORWARD_STATES: MigrationState[] = [
+  "PLANNED",
+  "PROVISIONING_TARGET_QM",
+  "VALIDATING_PRE",
+  "REWIRING",
+  "DRAIN_WAIT",
+  "VALIDATING_DURING",
+  "DRAINING_SOURCE",
+  "VALIDATING_POST",
+  "COMPLETED",
+];
+
+export const TERMINAL_STATES = new Set<MigrationState>([
+  "COMPLETED",
+  "ROLLED_BACK",
+  "ROLLBACK_FAILED",
+]);
+
+export const FAILURE_STATES = new Set<MigrationState>([
+  "ROLLING_BACK",
+  "ROLLED_BACK",
+  "ROLLBACK_FAILED",
+]);
+
+export interface MigrationStep {
+  id: number;
+  step_index: number;
+  audit_op: string;
+  description: string;
+  payload: Record<string, unknown>;
+  rollback_payload: Record<string, unknown> | null;
+  started_at: string | null;
+  completed_at: string | null;
+  succeeded: boolean | null;
+  error_message: string | null;
+}
+
+export interface MigrationRisk {
+  severity: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
+  category: string;
+  description: string;
+  mitigation: string;
+}
+
+export interface MigrationPlanData {
+  narrative: string;
+  ordering_rationale: string;
+  predicted_duration_seconds: number;
+  bridge_channel_name: string;
+  bridge_xmitq_name: string;
+  queues_to_redirect: string[];
+  risks: MigrationRisk[];
+  rollback_strategy: string;
+}
+
+/** Wrapper persisted in Migration.plan column on the BCL. */
+export interface MigrationPlanWrapper {
+  plan: MigrationPlanData;
+  planner_audit: {
+    planner_source: "llm" | "fallback";
+    model: string;
+    duration_ms: number;
+    agent_invocation_id?: number;
+    fallback_reason?: string;
+  };
+  planner_input: Record<string, unknown>;
+}
+
+export interface Migration {
+  id: number;
+  app_id: string;
+  state: MigrationState;
+  plan: MigrationPlanWrapper | null;
+  started_at: string | null;
+  completed_at: string | null;
+  version: number;
+  steps: MigrationStep[];
+}
+
+export interface MigrationStartRequest {
+  app_id: string;
+  source_topology_name: string;
+  target_topology_name: string;
+}
+
+export interface MigrationRollbackRequest {
+  operator: string;
+  reason: string;
+}
+
+export interface MigrationAuditEntry {
+  id: number;
+  lamport_clock: number;
+  wall_clock: string;
+  operation: string;
+  actor: string;
+  qm_name: string | null;
+  success: boolean;
+  duration_ms: number | null;
+  is_rollback: boolean;
+  request_payload: Record<string, unknown> | null;
+  response_payload: Record<string, unknown> | null;
+  error_message: string | null;
+}
+
+export interface MigrationAuditResponse {
+  migration_id: number;
+  correlation_id: string | null;
+  count?: number;
+  entries: MigrationAuditEntry[];
+  note?: string;
+}
+
+export interface DrainRunSnapshot {
+  queue: string;
+  drained: boolean;
+  initial_depth: number;
+  final_depth: number | null;
+  measured_mu: number | null;
+  polls: number;
+  duration_seconds: number;
+  error_kind: string | null;
+  history: Array<{
+    poll: number;
+    t_seconds: number;
+    depth: number | null;
+    ipprocs: number | null;
+    opprocs: number | null;
+    error_kind: string;
+  }>;
+}
+
+export interface DrainRunGroup {
+  started_at: string;
+  completed_at: string;
+  outcome: "PASS" | "WARN" | "FAIL";
+  drains: DrainRunSnapshot[];
+}
+
+export interface MigrationDrainResponse {
+  migration_id: number;
+  state: MigrationState;
+  drain_runs: DrainRunGroup[];
+  note: string;
+  reference: string;
+}
+
+export interface MigrationPlanResponse {
+  migration_id: number;
+  state?: string;
+  plan?: MigrationPlanData;
+  planner_audit?: MigrationPlanWrapper["planner_audit"];
+  planner_input?: Record<string, unknown>;
+  note?: string;
 }
 
 // ────────── Fetch helpers ──────────
@@ -270,11 +450,6 @@ async function bclDelete<T>(path: string): Promise<T> {
   return (await res.json()) as T;
 }
 
-/**
- * Multipart POST for CSV upload.
- * The browser sets Content-Type with the multipart boundary automatically;
- * we must NOT set it ourselves or the boundary is missing.
- */
 async function bclPostForm<T>(path: string, form: FormData): Promise<T> {
   const res = await fetch(`${BCL_BASE}${path}`, {
     method: "POST",
@@ -295,11 +470,6 @@ export const bcl = {
     list: () => bclGet<Topology[]>("/topologies"),
     get: (id: number | string) => bclGet<Topology>(`/topologies/${id}`),
 
-    /**
-     * NEW: ingest a topology from a CSV file via multipart upload.
-     * The backend reads producer/consumer flows and creates the Topology
-     * + Application + QueueManager rows in one transaction.
-     */
     ingestCsv: (params: {
       file: File;
       name: string;
@@ -314,21 +484,9 @@ export const bcl = {
       return bclPostForm<CsvIngestResponse>("/topologies/ingest-csv", form);
     },
 
-    /**
-     * NEW: list applications participating in a topology.
-     * Used to populate the producer/consumer dropdowns for the
-     * test-message-flow form.
-     */
     listApps: (id: number | string) =>
       bclGet<Application[]>(`/topologies/${id}/applications`),
 
-    /**
-     * NEW: delete the topology row.
-     * - cascade=true → triggers a TEARDOWN realize run (delete MQ objects)
-     *   then deletes pods, then deletes the topology row.
-     * - cascade=false → deletes only the topology row; fails if any QM
-     *   is currently ready (must tear down first).
-     */
     delete: (id: number | string, cascade: boolean, actor: string) => {
       const params = new URLSearchParams({
         cascade: cascade ? "true" : "false",
@@ -369,14 +527,6 @@ export const bcl = {
       ),
   },
 
-  /**
-   * NEW: MQ Object Realization endpoints.
-   *
-   * After pods are up (provisioning.COMPLETED), call realize.start(APPLY) to
-   * create the queues, channels, XMITQs derived from the CSV flow spec.
-   *
-   * realize.start(TEARDOWN) reverses it (deletes the MQ objects); pods stay up.
-   */
   realize: {
     start: (topologyId: number | string, req: MqRealizeStartRequest) =>
       bclPost<MqRealizeStartRequest, MqRealizeRun>(
@@ -384,8 +534,6 @@ export const bcl = {
         req,
       ),
     teardown: (topologyId: number | string, req: MqRealizeStartRequest) => {
-      // DELETE with body is awkward but supported by FastAPI. We use POST-style
-      // wrapper here because some proxies strip DELETE bodies.
       return fetch(`${BCL_BASE}/topologies/${topologyId}/realize-mq-objects`, {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
@@ -407,13 +555,6 @@ export const bcl = {
       ),
   },
 
-  /**
-   * NEW: Test message flow — end-to-end proof.
-   *
-   * Picks the flow between producer_app_id and consumer_app_id, runs amqsput
-   * in the producer pod, polls consumer queue depth, runs amqsget in the
-   * consumer pod, returns the step-by-step trace.
-   */
   messageFlow: {
     send: (topologyId: number | string, req: TestMessageRequest) =>
       bclPost<TestMessageRequest, TestMessageResult>(
@@ -421,11 +562,53 @@ export const bcl = {
         req,
       ),
   },
+
+  /**
+   * NEW: Migration workstream — per-app source -> target migration.
+   *
+   * Lifecycle:
+   *   1. start() with app_id + source/target names -> 202, returns Migration row
+   *      in PLANNED. Engine kicks off background state machine.
+   *   2. get() polls state. Forward path advances through 9 states until COMPLETED.
+   *   3. rollback() triggers reverse-Lamport walk of MigrationStep.rollback_payload.
+   *   4. audit() and drain() are scoped reads for the live UI.
+   *
+   * Mirrors provisioning + realize patterns: 202 + polling, audit-logged, idempotent.
+   */
+  migrations: {
+    start: (req: MigrationStartRequest, actor = "operator:raitus") =>
+      bclPost<MigrationStartRequest, Migration>(
+        `/migrations?actor=${encodeURIComponent(actor)}`,
+        req,
+      ),
+    get: (id: number | string) =>
+      bclGet<Migration>(`/migrations/${id}`),
+    list: (params?: { app_id?: string; target_topology_id?: number }) => {
+      const qs = new URLSearchParams();
+      if (params?.app_id) qs.set("app_id", params.app_id);
+      if (params?.target_topology_id)
+        qs.set("target_topology_id", String(params.target_topology_id));
+      const q = qs.toString();
+      return bclGet<Migration[]>(`/migrations${q ? `?${q}` : ""}`);
+    },
+    rollback: (id: number | string, req: MigrationRollbackRequest) =>
+      bclPost<MigrationRollbackRequest, Migration>(
+        `/migrations/${id}/rollback`,
+        req,
+      ),
+    audit: (id: number | string, limit = 200) =>
+      bclGet<MigrationAuditResponse>(
+        `/migrations/${id}/audit?limit=${limit}`,
+      ),
+    plan: (id: number | string) =>
+      bclGet<MigrationPlanResponse>(`/migrations/${id}/plan`),
+    drain: (id: number | string) =>
+      bclGet<MigrationDrainResponse>(`/migrations/${id}/drain`),
+  },
 };
 
 // ────────── Display helpers ──────────
 
-/** Compact phase label for the UI ("PERSISTENTVOLUMECLAIM_APPLY" → "PVC apply"). */
 export function phaseLabel(phase: string): string {
   switch (phase) {
     case "PERSISTENTVOLUMECLAIM_APPLY":
@@ -447,7 +630,6 @@ export function phaseLabel(phase: string): string {
   }
 }
 
-/** Wall-clock formatter that's stable across renders for SWR diffing. */
 export function fmtElapsed(startIso: string, endIso: string | null): string {
   const start = Date.parse(startIso);
   const end = endIso ? Date.parse(endIso) : Date.now();
@@ -458,7 +640,6 @@ export function fmtElapsed(startIso: string, endIso: string | null): string {
   return `${m}m ${s}s`;
 }
 
-/** Short label for MqRealize commands ("CHANNEL_SDR" → "SDR channel"). */
 export function realizeCommandLabel(kind: string | null | undefined): string {
   if (!kind) return "—";
   switch (kind) {
@@ -477,4 +658,80 @@ export function realizeCommandLabel(kind: string | null | undefined): string {
     default:
       return kind.toLowerCase().replace(/_/g, " ");
   }
+}
+
+/** Short label for a migration state. Used in the stepper + state pill. */
+export function migrationStateLabel(state: MigrationState): string {
+  switch (state) {
+    case "PLANNED":
+      return "planned";
+    case "PROVISIONING_TARGET_QM":
+      return "provisioning target";
+    case "VALIDATING_PRE":
+      return "validating (pre)";
+    case "REWIRING":
+      return "rewiring";
+    case "DRAIN_WAIT":
+      return "drain wait";
+    case "VALIDATING_DURING":
+      return "validating (during)";
+    case "DRAINING_SOURCE":
+      return "draining source";
+    case "VALIDATING_POST":
+      return "validating (post)";
+    case "COMPLETED":
+      return "completed";
+    case "ROLLING_BACK":
+      return "rolling back";
+    case "ROLLED_BACK":
+      return "rolled back";
+    case "ROLLBACK_FAILED":
+      return "rollback failed";
+  }
+}
+
+/** Compact stepper label (fits in ~8 chars). */
+export function migrationStateShortLabel(state: MigrationState): string {
+  switch (state) {
+    case "PLANNED":
+      return "plan";
+    case "PROVISIONING_TARGET_QM":
+      return "prov.";
+    case "VALIDATING_PRE":
+      return "v.pre";
+    case "REWIRING":
+      return "rewire";
+    case "DRAIN_WAIT":
+      return "drain";
+    case "VALIDATING_DURING":
+      return "v.during";
+    case "DRAINING_SOURCE":
+      return "drain·src";
+    case "VALIDATING_POST":
+      return "v.post";
+    case "COMPLETED":
+      return "done";
+    default:
+      return state.toLowerCase();
+  }
+}
+
+/** Map state to text-color token. */
+export function migrationStateColor(state: MigrationState): string {
+  if (state === "COMPLETED") return "text-success";
+  if (FAILURE_STATES.has(state)) {
+    return state === "ROLLED_BACK" ? "text-warn" : "text-danger";
+  }
+  if (TERMINAL_STATES.has(state)) return "text-fg-muted";
+  return "text-accent";
+}
+
+/** Map state to background-dot token. */
+export function migrationStateDot(state: MigrationState): string {
+  if (state === "COMPLETED") return "bg-success";
+  if (FAILURE_STATES.has(state)) {
+    return state === "ROLLED_BACK" ? "bg-warn" : "bg-danger";
+  }
+  if (TERMINAL_STATES.has(state)) return "bg-fg-subtle";
+  return "bg-accent";
 }

@@ -509,6 +509,38 @@ export default function TopologyDetail({
         </section>
       )}
 
+      {/* Step 4: Migrate apps */}
+      {topology && (
+        <section className="mb-6">
+          <div className="panel">
+            <div className="flex items-center justify-between border-b border-border-subtle px-4 py-3">
+              <div>
+                <h2 className="text-sm font-medium">
+                  Step 4 · Migrate applications
+                </h2>
+                <p className="mt-0.5 text-xs text-fg-muted">
+                  Per-app source → target migration with state machine,
+                  Little&apos;s Law drain prediction, and per-app rollback.
+                </p>
+              </div>
+            </div>
+            <div className="px-4 py-4">
+              <p className="mb-3 text-xs text-fg-muted">
+                Migrations are cross-topology: an app moves from a SOURCE
+                topology to its dedicated target QM in a TARGET topology.
+                Open the workspace to start one.
+              </p>
+              <Link
+                href="/migrations"
+                className={btn("accent", false) + " inline-block no-underline"}
+              >
+                Open migration workspace →
+              </Link>
+            </div>
+          </div>
+        </section>
+      )}
+
       {/* Audit trail scoped to the most recent provision run */}
       {displayRun && auditPage && auditPage.entries.length > 0 && (
         <section className="mb-6">
