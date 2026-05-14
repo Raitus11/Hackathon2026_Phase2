@@ -4,3 +4,5 @@ $m.steps | Select-Object step_index, audit_op, succeeded, error_message | Format
 
 $a = Invoke-RestMethod "http://localhost:8080/migrations/1/audit?limit=300"
 $a.entries | Where-Object { $_.success -eq $false } | Select-Object lamport_clock, operation, error_message | Format-List
+
+python -c "from bcl.migration.choreography import bridge_channel_name; print(bridge_channel_name('WL6EEBDJ', 'APPQM_LIY_KW'))"
