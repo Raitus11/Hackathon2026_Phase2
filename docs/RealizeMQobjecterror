@@ -53,3 +53,38 @@ oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'DISPLAY CHSTATUS(*)
 oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'DISPLAY CHSTATUS(*) ALL' | runmqsc WL6EEBDJ" | findstr /I "CHANNEL CONNAME STATUS RQMNAME SUBSTATE LSTMSGT"
 
 oc exec deployment/qm-wl6er0c -n roco-dev -- bash -c "echo 'DISPLAY LSSTATUS(*)' | runmqsc WL6ER0C"
+
+
+--------------------------------------------------------------------------------------------------------------------
+
+$qms = @(
+  @{pod="qm-wl6er0c"; qm="WL6ER0C"},
+  @{pod="qm-wl6er2c"; qm="WL6ER2C"},
+  @{pod="qm-wl6es3c"; qm="WL6ES3C"},
+  @{pod="qm-wlz03";   qm="WLZ03"},
+  @{pod="qm-wq21";    qm="WQ21"},
+  @{pod="qm-wq22";    qm="WQ22"},
+  @{pod="qm-wq31";    qm="WQ31"},
+  @{pod="qm-wuz20";   qm="WUZ20"},
+  @{pod="qm-wl6eebdj"; qm="WL6EEBDJ"}
+)
+foreach ($t in $qms) {
+  Write-Host "→ $($t.qm)"
+  oc exec deployment/$($t.pod) -n roco-dev -- bash -c "runmqsc $($t.qm) <<EOF
+ALTER QMGR CHLAUTH(DISABLED)
+REFRESH SECURITY TYPE(CONNAUTH)
+EOF"
+}
+
+
+Start-Sleep 30
+oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'DISPLAY CHSTATUS(*) STATUS' | runmqsc WL6EEBDJ"
+
+----
+
+oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "runmqsc WL6EEBDJ <<EOF
+START CHANNEL('WL6EEBDJ.WL6ER0C')
+START CHANNEL('WL6EEBDJ.WL6ER2C')
+EOF"
+
+
