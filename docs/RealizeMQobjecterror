@@ -46,3 +46,10 @@ Invoke-RestMethod "http://localhost:8080/topologies/1/realize-mq-objects/a157b71
 
 
 oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'DISPLAY CHSTATUS(*) STATUS' | runmqsc WL6EEBDJ" | findstr STATUS
+
+
+----------------------
+
+oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'DISPLAY CHSTATUS(*) ALL' | runmqsc WL6EEBDJ" | findstr /I "CHANNEL CONNAME STATUS RQMNAME SUBSTATE LSTMSGT"
+
+oc exec deployment/qm-wl6er0c -n roco-dev -- bash -c "echo 'DISPLAY LSSTATUS(*)' | runmqsc WL6ER0C"
