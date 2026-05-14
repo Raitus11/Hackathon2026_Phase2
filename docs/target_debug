@@ -23,3 +23,9 @@ $failed.request_payload | ConvertTo-Json -Depth 10
 Write-Host ""
 Write-Host "response_payload:"
 $failed.response_payload | ConvertTo-Json -Depth 10
+
+-------------------------------------------------------------------------
+
+Invoke-RestMethod -Method Delete -Uri "http://localhost:8080/topologies/2/realize-mq-objects" -ContentType "application/json" -Body '{"actor":"raitus","message":"clear partial realize"}'
+
+Invoke-RestMethod -Method Delete -Uri "http://localhost:8080/topologies/2?cascade=true&actor=raitus"
