@@ -1,0 +1,10 @@
+$names = oc get deployment,svc,secret,pvc -n roco-dev -o name | Select-String "appqm"
+$names | ForEach-Object { oc delete $_ -n roco-dev }
+
+
+oc get deployment,svc,secret,pvc -n roco-dev | Select-String "appqm"
+
+
+
+cd D:\Hackathon2026Phase2\intelliai2doto\bcl
+python -c "import sqlite3; c=sqlite3.connect('local-data/bcl.db'); c.execute('DELETE FROM topologies WHERE id=2'); c.commit(); print('deleted topology 2')"
