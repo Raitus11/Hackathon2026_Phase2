@@ -1,5 +1,9 @@
-oc get pods -n roco-dev
+Invoke-RestMethod "http://localhost:8080/topologies/1/provision" -Method POST -ContentType "application/json" -Body '{}'
 
-Invoke-RestMethod "http://localhost:8080/topologies/1" |
-     Select-Object -ExpandProperty queue_managers |
-     Select-Object qm_name, pod_name | Format-Table
+# Replace <run_id> with the run_id from response above
+Invoke-RestMethod "http://localhost:8080/topologies/1/provision/<run_id>/status"
+
+Invoke-RestMethod "http://localhost:8080/topologies/1/realize-mq-objects" -Method POST -ContentType "application/json" -Body '{}'
+
+# Replace <run_id> with the new run_id from realize response
+Invoke-RestMethod "http://localhost:8080/topologies/1/realize-mq-objects/<run_id>/status"
