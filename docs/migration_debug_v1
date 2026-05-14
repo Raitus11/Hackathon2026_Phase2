@@ -1,0 +1,6 @@
+Invoke-RestMethod -Method Post -Uri "http://localhost:8080/migrations/1/rollback" -ContentType "application/json" -Body '{"operator":"raitus","reason":"channel name fix"}'
+
+
+
+$env:BCL_LLM_PROVIDER = "stub"
+   uvicorn bcl.api.main:app --port 8080 --reload
