@@ -41,3 +41,7 @@ do {
   if ($latest.state -notin @("PENDING","RUNNING")) { break }
   Start-Sleep 5
 } while ($true)
+-----------------------------------------------------
+
+
+oc get deployment,svc,secret,pvc -n roco-dev | Select-String -CaseSensitive "appqm"
