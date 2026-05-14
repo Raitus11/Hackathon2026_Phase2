@@ -9,3 +9,7 @@ oc get pods -n roco-dev -o wide
 Invoke-RestMethod "http://localhost:8080/topologies" |
   ConvertTo-Json -Depth 10 |
   findstr /I "pod_name qm_name"
+-----------------------------------
+
+
+Invoke-RestMethod "http://localhost:8080/topologies/1/provision" -Method POST
