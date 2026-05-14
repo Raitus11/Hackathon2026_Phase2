@@ -23,6 +23,48 @@ print('orphan apps:', c.execute('SELECT topology_id, app_id FROM applications WH
 
 
 
+=======================================
+
+
+cd D:\Hackathon2026Phase2\intelliai2doto\bcl
+python -c "
+import sqlite3
+c = sqlite3.connect('local-data/bcl.db')
+
+# 1. Show schema for the three tables
+for t in ['topologies', 'queue_managers', 'applications']:
+    print(f'== {t} ==')
+    cols = [r[1] for r in c.execute(f'PRAGMA table_info({t})')]
+    print('  columns:', cols)
+    print('  rows:', c.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0])
+
+# 2. Find the FK column name (could be topology_id, source_topology_id, etc.)
+print()
+print('== Surviving topology IDs ==')
+print(c.execute('SELECT id, name, kind FROM topologies').fetchall())
+
+# 3. Heuristic delete: any column ending in _id that points to topologies
+qm_cols = [r[1] for r in c.execute('PRAGMA table_info(queue_managers)')]
+app_cols = [r[1] for r in c.execute('PRAGMA table_info(applications)')]
+fk_candidates = [col for col in qm_cols if col.endswith('topology_id') or col == 'topology']
+print('FK candidates in queue_managers:', fk_candidates)
+fk = fk_candidates[0] if fk_candidates else None
+if fk:
+    n1 = c.execute(f'DELETE FROM queue_managers WHERE {fk} NOT IN (SELECT id FROM topologies)').rowcount
+    print(f'deleted {n1} orphan queue_managers')
+fk_candidates_a = [col for col in app_cols if col.endswith('topology_id') or col == 'topology']
+print('FK candidates in applications:', fk_candidates_a)
+fka = fk_candidates_a[0] if fk_candidates_a else None
+if fka:
+    n2 = c.execute(f'DELETE FROM applications WHERE {fka} NOT IN (SELECT id FROM topologies)').rowcount
+    print(f'deleted {n2} orphan applications')
+
+c.commit()
+print('done')
+"
+
+
+
 
 python -c "
 import sqlite3
