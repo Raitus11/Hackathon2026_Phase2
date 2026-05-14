@@ -32,3 +32,7 @@ Invoke-RestMethod "http://localhost:8080/topologies/1" | Select-Object -ExpandPr
 
 # 5. Then realize
 Invoke-RestMethod "http://localhost:8080/topologies/1/realize-mq-objects" -Method POST -ContentType "application/json" -Body '{}'
+
+------------------------------------------------------------------------------
+
+Invoke-RestMethod "http://localhost:8080/topologies/1/realize-mq-objects/a157b717-a85b-4941-9100-34a7b5fbfdbe/status"
