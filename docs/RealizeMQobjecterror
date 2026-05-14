@@ -22,7 +22,7 @@ Invoke-RestMethod "http://localhost:8080/topologies/1" |
 
 ------------------------------------------------
 
-oc get pods -n roco-dev -l app.kubernetes.io/component=mq -o jsonpath='{range .items[*]}{.metadata.labels.qm-name}{"\t"}{.metadata.name}{"\n"}{end}'
+oc get pods -n roco-dev | findstr qm-
 
 Invoke-RestMethod "http://localhost:8080/topologies/1/provision" -Method POST -ContentType "application/json" -Body '{}'
 
