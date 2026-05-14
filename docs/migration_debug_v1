@@ -9,5 +9,6 @@ python -c "from bcl.migration.choreography import bridge_channel_name; print(bri
 
 ----------------------------------
 
-$a = Invoke-RestMethod "http://localhost:8080/migrations/1/audit?limit=300"
-$a.entries | Where-Object { $_.operation -like "*MQSC*" -or $_.operation -like "*PROBE*" -or $_.operation -like "*VALIDATION*" } | Select-Object lamport_clock, operation, success, qm_name, error_message | Format-Table -Wrap
+$m = Invoke-RestMethod "http://localhost:8080/migrations/1"
+$m | Select-Object id, state, app_id, started_at, completed_at, version | Format-List
+$m.plan.planner_input | ConvertTo-Json -Depth 5
