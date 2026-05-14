@@ -9,3 +9,10 @@ Invoke-RestMethod "http://localhost:8080/audit?limit=50" |
   Sort-Object lamport_clock -Descending |
   Select-Object -First 1 |
   ConvertTo-Json -Depth 10
+
+Invoke-RestMethod "http://localhost:8080/audit?limit=200" |
+  Select-Object -ExpandProperty entries |
+  Where-Object { $_.operation -eq "MQSC_ALTER_QMGR" -and $_.success -eq $false -and $_.qm_name -eq "WL6EEBDJ" } |
+  Sort-Object lamport_clock -Descending |
+  Select-Object -First 1 |
+  ConvertTo-Json -Depth 10
