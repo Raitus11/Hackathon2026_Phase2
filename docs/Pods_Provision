@@ -1,7 +1,1 @@
-oc get pods -n roco-dev -w
-# Ctrl+C when all 9 show 1/1 Running (~2-3 min)
-
-
-oc get pods -n roco-dev
-
-oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'DISPLAY CHSTATUS(*) STATUS' | runmqsc WL6EEBDJ"
+Invoke-RestMethod "http://localhost:8080/audit?limit=10" | ConvertTo-Json -Depth 5
