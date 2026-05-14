@@ -4,3 +4,22 @@ $j = Invoke-RestMethod "http://localhost:8080/audit?limit=200&operation=MQSC_ALT
 
 $j = Invoke-RestMethod "http://localhost:8080/audit?limit=50&operation=MQSC_DEFINE_CHANNEL_SDR"
 $j.entries | Where-Object { $_.success -eq $false } | Select-Object qm_name, error_message -First 3 | Format-List
+
+..............................................................................................................................................
+
+
+$j = Invoke-RestMethod "http://localhost:8080/audit?limit=50&operation=MQSC_DEFINE_CHANNEL_SDR"
+$failed = $j.entries | Where-Object { $_.success -eq $false } | Select-Object -First 1
+$failed.request_payload | ConvertTo-Json -Depth 10
+
+
+
+
+$j = Invoke-RestMethod "http://localhost:8080/audit?limit=50&operation=MQSC_DEFINE_CHANNEL_SDR"
+$failed = $j.entries | Where-Object { $_.success -eq $false } | Select-Object -First 1
+Write-Host "qm_name: $($failed.qm_name)"
+Write-Host "request_payload:"
+$failed.request_payload | ConvertTo-Json -Depth 10
+Write-Host ""
+Write-Host "response_payload:"
+$failed.response_payload | ConvertTo-Json -Depth 10
