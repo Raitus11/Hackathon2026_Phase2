@@ -1,6 +1,6 @@
-Invoke-RestMethod -Method Post -Uri "http://localhost:8080/migrations/1/rollback" -ContentType "application/json" -Body '{"operator":"raitus","reason":"channel name fix"}'
+$m = Invoke-RestMethod "http://localhost:8080/migrations/1"
+$m.steps | Select-Object step_index, audit_op, succeeded, error_message | Format-Table -Wrap
 
 
-
-$env:BCL_LLM_PROVIDER = "stub"
-   uvicorn bcl.api.main:app --port 8080 --reload
+$a = Invoke-RestMethod "http://localhost:8080/migrations/1/audit?limit=300"
+$a.entries | Where-Object { $_.success -eq $false } | Select-Object lamport_clock, operation, error_message | Format-List
