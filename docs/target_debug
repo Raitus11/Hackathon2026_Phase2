@@ -31,3 +31,13 @@ Invoke-RestMethod -Method Delete -Uri "http://localhost:8080/topologies/2/realiz
 Invoke-RestMethod -Method Delete -Uri "http://localhost:8080/topologies/2?cascade=true&actor=raitus"
 
 Invoke-RestMethod "http://localhost:8080/topologies/2/realize-mq-objects" | Select-Object -First 1 | ConvertTo-Json -Depth 5
+--------------------------------------
+
+
+do {
+  $r = Invoke-RestMethod "http://localhost:8080/topologies/2/realize-mq-objects"
+  $latest = $r | Sort-Object started_at -Descending | Select-Object -First 1
+  Write-Host "state=$($latest.state) direction=$($latest.direction) applied=$($latest.commands_applied) failed=$($latest.commands_failed)"
+  if ($latest.state -notin @("PENDING","RUNNING")) { break }
+  Start-Sleep 5
+} while ($true)
