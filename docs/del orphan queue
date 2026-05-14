@@ -34,3 +34,16 @@ if fka:
 c.commit()
 print('done')
 "
+
+
+
+
+=================================================
+
+python -c "
+import sqlite3
+c = sqlite3.connect('local-data/bcl.db')
+n = c.execute('DELETE FROM queue_managers WHERE topology_id NOT IN (SELECT id FROM topologies)').rowcount
+c.commit()
+print(f'deleted {n} orphan queue_managers')
+"
