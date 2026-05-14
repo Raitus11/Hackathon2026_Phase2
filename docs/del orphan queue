@@ -47,3 +47,14 @@ n = c.execute('DELETE FROM queue_managers WHERE topology_id NOT IN (SELECT id FR
 c.commit()
 print(f'deleted {n} orphan queue_managers')
 "
+
+=========================================================
+
+
+python -c "
+import sqlite3
+c = sqlite3.connect('local-data/bcl.db')
+print('topologies:', c.execute('SELECT id, name, kind FROM topologies').fetchall())
+print('queue_managers count:', c.execute('SELECT COUNT(*) FROM queue_managers').fetchone()[0])
+print('source QMs:', c.execute('SELECT qm_name FROM queue_managers WHERE topology_id=1').fetchall())
+"
