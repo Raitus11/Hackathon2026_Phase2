@@ -83,8 +83,12 @@ oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'DISPLAY CHSTATUS(*)
 ----
 
 oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "runmqsc WL6EEBDJ <<EOF
+STOP CHANNEL('WL6EEBDJ.WL6ER0C') MODE(FORCE)
+STOP CHANNEL('WL6EEBDJ.WL6ER2C') MODE(FORCE)
 START CHANNEL('WL6EEBDJ.WL6ER0C')
 START CHANNEL('WL6EEBDJ.WL6ER2C')
 EOF"
 
+Start-Sleep 5
+oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'DISPLAY CHSTATUS(*) STATUS' | runmqsc WL6EEBDJ"
 
