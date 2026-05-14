@@ -8,3 +8,27 @@ oc get deployment,svc,secret,pvc -n roco-dev | Select-String "appqm"
 
 cd D:\Hackathon2026Phase2\intelliai2doto\bcl
 python -c "import sqlite3; c=sqlite3.connect('local-data/bcl.db'); c.execute('DELETE FROM topologies WHERE id=2'); c.commit(); print('deleted topology 2')"
+
+
+=------------------------------------------------------------------------------------------------------
+
+cd D:\Hackathon2026Phase2\intelliai2doto\bcl
+python -c "
+import sqlite3
+c = sqlite3.connect('local-data/bcl.db')
+print('topologies:', c.execute('SELECT id, name, kind FROM topologies').fetchall())
+print('orphan QMs:', c.execute('SELECT topology_id, qm_name FROM queue_managers WHERE topology_id NOT IN (SELECT id FROM topologies)').fetchall())
+print('orphan apps:', c.execute('SELECT topology_id, app_id FROM applications WHERE topology_id NOT IN (SELECT id FROM topologies)').fetchall())
+"
+
+
+
+
+python -c "
+import sqlite3
+c = sqlite3.connect('local-data/bcl.db')
+c.execute('DELETE FROM queue_managers WHERE topology_id NOT IN (SELECT id FROM topologies)')
+c.execute('DELETE FROM applications WHERE topology_id NOT IN (SELECT id FROM topologies)')
+c.commit()
+print('orphans cleaned')
+"
