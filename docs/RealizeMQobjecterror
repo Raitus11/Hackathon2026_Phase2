@@ -13,3 +13,9 @@ Invoke-RestMethod "http://localhost:8080/topologies" |
 
 
 Invoke-RestMethod "http://localhost:8080/topologies/1/provision" -Method POST
+-------------------------------------------------------------------------------------------
+
+Invoke-RestMethod "http://localhost:8080/topologies/1" |
+  Select-Object -ExpandProperty queue_managers |
+  Select-Object qm_name, pod_name, is_ready |
+  Format-Table -AutoSize
