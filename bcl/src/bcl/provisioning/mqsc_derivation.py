@@ -212,6 +212,76 @@ def _build_alter_qmgr_deadq(qm_name: str, dlq_name: str) -> MqscCommand:
     )
 
 
+def _build_alter_qmgr_chlauth_disabled(qm_name: str) -> MqscCommand:
+    """Disable channel authentication records on this QM.
+
+    On a freshly-created MQ container QM, the default CHLAUTH ruleset
+    includes a blanket BLOCKUSER('*MQADMIN') rule plus other default
+    blocks that cause inbound SDR-from-peer-QM channel connections to
+    fail with AMQ9777 (channel was blocked by CHLAUTH). The channel
+    sits in STATUS(RETRYING) with empty RQMNAME indefinitely.
+
+    For the Phase 2 demo environment (private OCP namespace, no external
+    ingress, no untrusted clients), wholesale disabling CHLAUTH is the
+    pragmatic unblock. The downstream effect is that channel auth is now
+    governed only by SSLCIPH (none on our channels yet) and MCAUSER, which
+    in this environment is acceptable.
+
+    PRODUCTION-GRADE FIX (Phase 3 backlog):
+      Keep CHLAUTH(ENABLED) and emit a SET CHLAUTH rule per source-peer-QM
+      that authorizes the specific MCA. Example:
+        SET CHLAUTH('<SDR-name>') TYPE(ADDRESSMAP) ADDRESS('<peer-pod-IP>')
+                                   MCAUSER('mqm') ACTION(REPLACE)
+      That preserves CHLAUTH posture and gives a defensible audit trail
+      ("only these named peers can use these named channels").
+
+    rollback_text is None: we don't capture prior CHLAUTH state. Same
+    posture as ALTER QMGR DEADQ — inverse_plan filters None out.
+
+    Reference: IBM MQ docs, "Channel authentication records",
+    https://www.ibm.com/docs/en/ibm-mq/9.4?topic=security-channel-authentication-records
+    """
+    return MqscCommand(
+        op_kind=AuditOperation.MQSC_ALTER_QMGR,
+        object_kind="QMGR",
+        object_name=qm_name,
+        mqsc_text="ALTER QMGR CHLAUTH(DISABLED)",
+        rationale=(
+            "Disable default-deny channel authentication so SDR channels "
+            "from peer QMs can connect without explicit per-peer CHLAUTH "
+            "rules. Demo-environment posture; production should keep "
+            "CHLAUTH(ENABLED) and use SET CHLAUTH ADDRESSMAP rules."
+        ),
+        rollback_text=None,  # No captured prior state; intentionally not rollable.
+        related_flows=(),
+    )
+
+
+def _build_refresh_security_connauth(qm_name: str) -> MqscCommand:
+    """Refresh the connection-authentication security cache.
+
+    Required after ALTER QMGR CHLAUTH(...) for the change to apply to
+    already-cached connection decisions. Without this, sessions
+    established before the ALTER may keep their stale auth state until
+    the QM is restarted.
+
+    Reference: IBM MQ docs, "REFRESH SECURITY",
+    https://www.ibm.com/docs/en/ibm-mq/9.4?topic=commands-refresh-security
+    """
+    return MqscCommand(
+        op_kind=AuditOperation.MQSC_ALTER_QMGR,
+        object_kind="QMGR",
+        object_name=qm_name,
+        mqsc_text="REFRESH SECURITY TYPE(CONNAUTH)",
+        rationale=(
+            "Flush the connection-authentication cache so the preceding "
+            "CHLAUTH change takes effect on existing and new connections."
+        ),
+        rollback_text=None,
+        related_flows=(),
+    )
+
+
 def _build_dlq_qlocal(dlq_name: str) -> MqscCommand:
     """Define the DLQ itself as a local queue."""
     return MqscCommand(
@@ -489,6 +559,8 @@ def derive_mqsc_for_qm(
     Returns:
         MqscPlan with deterministic command ordering:
             1. ALTER QMGR DEADQ
+            1b. ALTER QMGR CHLAUTH(DISABLED)  [demo posture; see builder]
+            1c. REFRESH SECURITY TYPE(CONNAUTH)
             2. DEFINE QLOCAL for DLQ (idempotent — won't fail if pre-existing)
             3. DEFINE QLOCAL for each local-flow queue, alphabetically by name
             4. DEFINE QLOCAL for each consumer-side queue on remote flows
@@ -642,6 +714,18 @@ def derive_mqsc_for_qm(
 
     # 1. ALTER QMGR
     commands.append(_build_alter_qmgr_deadq(qm_name, dlq_name))
+    # 1b. Disable CHLAUTH so SDR-from-peer channels connect without
+    #     per-peer SET CHLAUTH rules. Demo posture; see builder docstring
+    #     for production-grade alternative.
+    commands.append(_build_alter_qmgr_chlauth_disabled(qm_name))
+    # 1c. Refresh connection-auth cache so the preceding ALTER takes
+    #     effect on existing sessions without a QM restart.
+    commands.append(_build_refresh_security_connauth(qm_name))
+    warnings.append(
+        f"CHLAUTH disabled on {qm_name} for demo-environment compatibility. "
+        "Production should keep CHLAUTH(ENABLED) and emit SET CHLAUTH "
+        "ADDRESSMAP rules per authorized peer QM. See Phase 3 backlog."
+    )
 
     # 2. DLQ itself
     commands.append(_build_dlq_qlocal(dlq_name))
