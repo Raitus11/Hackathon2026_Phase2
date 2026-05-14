@@ -36,3 +36,13 @@ Invoke-RestMethod "http://localhost:8080/topologies/1/realize-mq-objects" -Metho
 ------------------------------------------------------------------------------
 
 Invoke-RestMethod "http://localhost:8080/topologies/1/realize-mq-objects/a157b717-a85b-4941-9100-34a7b5fbfdbe/status"
+
+------------------------------------
+
+
+# Check final state
+Invoke-RestMethod "http://localhost:8080/topologies/1/realize-mq-objects/a157b717-a85b-4941-9100-34a7b5fbfdbe/status" |
+  Select-Object state, qms_completed, qms_failed, commands_applied, commands_skipped_idempotent, commands_failed
+
+
+oc exec deployment/qm-wl6eebdj -n roco-dev -- bash -c "echo 'DISPLAY CHSTATUS(*) STATUS' | runmqsc WL6EEBDJ" | findstr STATUS
