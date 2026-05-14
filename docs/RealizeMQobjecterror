@@ -19,3 +19,14 @@ Invoke-RestMethod "http://localhost:8080/topologies/1" |
   Select-Object -ExpandProperty queue_managers |
   Select-Object qm_name, pod_name, is_ready |
   Format-Table -AutoSize
+
+------------------------------------------------
+
+oc get pods -n roco-dev -l app.kubernetes.io/component=mq -o jsonpath='{range .items[*]}{.metadata.labels.qm-name}{"\t"}{.metadata.name}{"\n"}{end}'
+
+Invoke-RestMethod "http://localhost:8080/topologies/1/provision" -Method POST -ContentType "application/json" -Body '{}'
+
+Start-Sleep 15
+Invoke-RestMethod "http://localhost:8080/topologies/1" | Select-Object -ExpandProperty queue_managers | Select-Object qm_name, pod_name, is_ready | Format-Table -AutoSize
+
+Invoke-RestMethod "http://localhost:8080/topologies/1/realize-mq-objects" -Method POST -ContentType "application/json" -Body '{}'
