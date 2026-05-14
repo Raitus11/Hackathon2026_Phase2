@@ -1,0 +1,4 @@
+Invoke-RestMethod "http://localhost:8080/topologies/6" | ConvertTo-Json -Depth 10 | findstr /I "JU"
+
+Invoke-RestMethod "http://localhost:8080/topologies/6" -Method Get | ConvertTo-Json -Depth 5 > topology_before_nuke.json
+
