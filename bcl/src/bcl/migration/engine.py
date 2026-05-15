@@ -936,47 +936,111 @@ async def _do_draining_source(
     actor: str,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> tuple[bool, str | None]:
-    """Wait for the bridge XMITQ itself to drain (any in-flight forwarding).
+    """Wait for the bridge XMITQ depth to reach 0.
 
-    With λ_in -> 0 after VALIDATING_DURING, this should converge quickly.
-    We use a tighter timeout here (1/3 of the drain budget) because by
-    this point we know μ.
+    XMITQs differ from front-line QLOCALs: the sender channel (SDR) keeps
+    an open handle on the XMITQ for the lifetime of the channel, so
+    IPPROCS/OPPROCS stay >=1 even when there is nothing in flight. The
+    standard zero-window condition (depth==0 AND ipprocs==0 AND opprocs==0)
+    never holds for an actively-attached XMITQ. The XMITQ-correct drain
+    condition is depth==0 over a small consecutive-poll window; the SDR's
+    attached handle is expected, not an anomaly.
+
+    With λ_in -> 0 after VALIDATING_DURING, depth converges quickly. We
+    poll inline with a depth-only zero window rather than reusing
+    wait_for_drain (which enforces the full zero-window invariant).
     """
+    from bcl.migration.drain import probe_queue
+
     settings = get_settings()
-    outcome = await wait_for_drain(
-        client,
-        qm_name=source_qm, pod_name=source_pod,
-        queue_name=bridge_xmitq, namespace=namespace,
-        timeout_seconds=max(15.0, settings.drain_wait_timeout_seconds / 3.0),
-        poll_interval_ms=settings.drain_poll_interval_ms,
-        zero_window_polls=settings.drain_zero_window_polls,
-    )
+    timeout_seconds = max(15.0, settings.drain_wait_timeout_seconds / 3.0)
+    poll_interval_s = settings.drain_poll_interval_ms / 1000.0
+    zero_window_required = settings.drain_zero_window_polls
+
+    started_at = time.monotonic()
+    polls_taken = 0
+    consecutive_zero_depth = 0
+    history: list[dict[str, Any]] = []
+    drained = False
+    final_depth: int | None = None
+    error_kind: str = "ok"
+
+    while time.monotonic() - started_at < timeout_seconds:
+        probe = await probe_queue(
+            client,
+            qm_name=source_qm, pod_name=source_pod,
+            queue_name=bridge_xmitq, namespace=namespace,
+        )
+        polls_taken += 1
+        t_seconds = round(time.monotonic() - started_at, 3)
+        history.append({
+            "poll": polls_taken, "t_seconds": t_seconds,
+            "depth": probe.depth, "ipprocs": probe.ipprocs,
+            "opprocs": probe.opprocs, "error_kind": probe.error_kind,
+        })
+
+        if probe.error_kind == "queue_not_found":
+            # XMITQ vanished — treat as drained (caller will re-realize if needed).
+            drained = True
+            final_depth = 0
+            error_kind = "queue_not_found"
+            break
+        if probe.error_kind != "ok":
+            error_kind = probe.error_kind
+            await asyncio.sleep(poll_interval_s)
+            continue
+
+        final_depth = probe.depth
+        # Depth-only zero window: the SDR's persistent handle on the XMITQ
+        # means ipprocs/opprocs are expected to be >=1.
+        if probe.depth == 0:
+            consecutive_zero_depth += 1
+            if consecutive_zero_depth >= zero_window_required:
+                drained = True
+                error_kind = "ok"
+                break
+        else:
+            consecutive_zero_depth = 0
+
+        await asyncio.sleep(poll_interval_s)
+
+    wall_duration = time.monotonic() - started_at
 
     async with session_factory() as session:
         await write_audit_entry(
             session,
             operation=AuditOperation.VALIDATION_RUN,
-            success=outcome.drained,
+            success=drained,
             actor=actor,
             correlation_id=correlation_id,
             qm_name=source_qm,
             request_payload={
                 "migration_id": migration_id, "phase": "DURING",
                 "kind": "DRAIN_BRIDGE_XMITQ", "queue": bridge_xmitq,
+                "condition": "depth_only_zero_window",
             },
             response_payload={
-                "drained": outcome.drained,
-                "polls": outcome.polls_taken,
-                "duration_seconds": outcome.wall_duration_seconds,
-                "history": outcome.history[-8:],  # last few only
+                "drained": drained,
+                "final_depth": final_depth,
+                "polls": polls_taken,
+                "duration_seconds": round(wall_duration, 3),
+                "history": history[-8:],  # last few only
+                "error_kind": error_kind,
+                "note": (
+                    "XMITQ uses depth-only zero-window. SDR keeps an open "
+                    "handle on the XMITQ for the channel lifetime, so "
+                    "IPPROCS/OPPROCS stay >=1 even when nothing is in flight."
+                ),
             },
-            duration_ms=int(outcome.wall_duration_seconds * 1000),
+            duration_ms=int(wall_duration * 1000),
         )
         await session.commit()
 
-    if not outcome.drained:
+    if not drained:
         return False, (
-            f"bridge XMITQ {bridge_xmitq} did not drain: {outcome.error_kind}"
+            f"bridge XMITQ {bridge_xmitq} did not drain "
+            f"(final depth={final_depth}, polls={polls_taken}, "
+            f"duration={wall_duration:.1f}s)"
         )
     return True, None
 
