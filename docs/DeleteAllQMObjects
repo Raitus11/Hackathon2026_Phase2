@@ -1,0 +1,38 @@
+# 1. Stop uvicorn
+Write-Host "→ Stop uvicorn now (Ctrl+C in its window), then press Enter here"
+Read-Host
+
+# 2. Delete all qm-* MQ resources
+Write-Host "→ Deleting all qm-* resources on roco-dev..."
+$names = oc get deployment,svc,secret,pvc -n roco-dev -o name | Select-String -CaseSensitive "qm-"
+$names | ForEach-Object { oc delete $_ -n roco-dev --ignore-not-found }
+
+# 3. Wait for pods
+Write-Host "→ Waiting for pods to terminate..."
+do {
+  $pods = oc get pods -n roco-dev -o name | Select-String -CaseSensitive "qm-"
+  if ($pods) { Write-Host "  $($pods.Count) pods still terminating..."; Start-Sleep 5 }
+} while ($pods)
+
+# 4. Wipe DB
+cd D:\Hackathon2026Phase2\intelliai2doto\bcl
+python -c "
+import sqlite3
+c = sqlite3.connect('local-data/bcl.db')
+for t in ['migration_steps','migrations','validation_runs','agent_invocations','mq_realize_runs','provision_runs','queue_managers','applications','topologies','audit_log']:
+    try:
+        n = c.execute(f'DELETE FROM {t}').rowcount
+        print(f'  {t}: deleted {n}')
+    except Exception as e:
+        print(f'  {t}: skip ({e})')
+c.commit()
+print('DB wiped')
+"
+
+# 5. Confirm clean
+Write-Host "→ Remaining qm-* resources (should be none):"
+oc get pods,pvc -n roco-dev | findstr "qm-"
+Write-Host ""
+Write-Host "→ If clean, restart uvicorn:"
+Write-Host '   $env:BCL_LLM_PROVIDER = "stub"'
+Write-Host "   uvicorn bcl.api.main:app --port 8080 --reload"
