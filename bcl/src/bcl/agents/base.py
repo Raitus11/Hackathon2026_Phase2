@@ -93,6 +93,43 @@ async def run_structured_agent(
     output_dict: dict[str, Any] | None = None
     model_id = f"{_provider_label()}:unknown"
 
+    # Stub provider short-circuit. When BCL_LLM_PROVIDER=stub the LLM
+    # backend deliberately returns a placeholder JSON ({"_stub": True})
+    # that cannot validate against any real output schema. Going through
+    # the normal validation path produces a noisy red ValidationError
+    # in the audit UI for what is actually expected behaviour — the
+    # caller's deterministic fallback is the intended code path.
+    #
+    # Short-circuit: skip the call, write a clean success audit row
+    # noting the stub backend, return parsed=None so the caller's
+    # fallback runs as designed.
+    if _provider_label() == "stub":
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        audit_row = await _persist_invocation(
+            session_factory=session_factory,
+            agent_name=agent_name,
+            trigger=trigger,
+            correlation_id=cid,
+            actor=actor,
+            input_for_audit=input_for_audit,
+            output_text=None,
+            output_dict={
+                "_stub_short_circuit": True,
+                "note": (
+                    "BCL_LLM_PROVIDER=stub. Skipped LLM call. "
+                    "Deterministic fallback used by caller."
+                ),
+            },
+            model_id="stub:none",
+            tokens_in=0,
+            tokens_out=0,
+            duration_ms=duration_ms,
+            succeeded=True,
+            error=None,
+            started_at=started_at,
+        )
+        return None, audit_row
+
     try:
         llm_resp = await complete_structured(
             system_prompt=system_prompt,
@@ -170,6 +207,38 @@ async def run_text_agent(
     succeeded = False
     error: str | None = None
     model_id = f"{_provider_label()}:unknown"
+
+    # Stub provider short-circuit (see run_structured_agent for full
+    # rationale). The text-agent stub would otherwise return a
+    # placeholder string that the caller would treat as a real LLM
+    # narrative. Skip cleanly and let the caller's deterministic
+    # fallback produce the actual deliverable.
+    if _provider_label() == "stub":
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        audit_row = await _persist_invocation(
+            session_factory=session_factory,
+            agent_name=agent_name,
+            trigger=trigger,
+            correlation_id=cid,
+            actor=actor,
+            input_for_audit=input_for_audit,
+            output_text=None,
+            output_dict={
+                "_stub_short_circuit": True,
+                "note": (
+                    "BCL_LLM_PROVIDER=stub. Skipped LLM call. "
+                    "Deterministic fallback used by caller."
+                ),
+            },
+            model_id="stub:none",
+            tokens_in=0,
+            tokens_out=0,
+            duration_ms=duration_ms,
+            succeeded=True,
+            error=None,
+            started_at=started_at,
+        )
+        return None, audit_row
 
     try:
         llm_resp = await complete_text(

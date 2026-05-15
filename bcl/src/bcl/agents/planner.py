@@ -199,12 +199,21 @@ async def plan_migration(
 
     # Fallback path
     plan = deterministic_plan(planner_input)
+    # Distinguish "stub provider configured" from "real LLM failed".
+    # The former is operator intent (offline demo); the latter is a
+    # production incident. The audit UI surfaces this distinction.
+    from bcl.config import get_settings
+    is_stub = get_settings().llm_provider == "stub"
     audit_meta = {
-        "planner_source": "fallback",
+        "planner_source": "stub_fallback" if is_stub else "fallback",
         "agent_invocation_id": invocation.id,
         "model": invocation.model,
         "duration_ms": invocation.duration_ms,
-        "fallback_reason": invocation.error_message or "no LLM output",
+        "fallback_reason": (
+            "BCL_LLM_PROVIDER=stub; deterministic plan used by design"
+            if is_stub
+            else (invocation.error_message or "no LLM output")
+        ),
     }
     return plan, audit_meta
 
