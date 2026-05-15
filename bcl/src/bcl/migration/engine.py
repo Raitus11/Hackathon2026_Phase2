@@ -760,11 +760,16 @@ def _is_idempotent_ok(result: Any) -> bool:
                 or rollback already removed it)
       AMQ8016 - channel not found (DELETE — same rationale)
       AMQ8260 - channel disposition not found (DELETE — same rationale)
+      AMQ8138 - object has incorrect type (DELETE QLOCAL on a QREMOTE —
+                the QLOCAL is already gone; a prior migration replaced
+                it with a QREMOTE pointing at the target. Desired
+                post-state is already achieved.)
     """
     ok = frozenset({
         "AMQ8350E", "AMQ8013E", "AMQ8348E",
         "AMQ9508E", "AMQ9509E",
         "AMQ8147E", "AMQ8016E", "AMQ8260E",
+        "AMQ8138E",
     })
     if not result.per_command:
         return False
