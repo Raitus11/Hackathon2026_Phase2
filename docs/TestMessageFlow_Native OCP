@@ -15,3 +15,19 @@ oc exec -n roco-dev deployment/qm-wq22 -- bash -c "/opt/mqm/samp/bin/amqsget RO.
 
 # 6. Bridge channel status + msg counter
 oc exec -n roco-dev deployment/qm-appqm-ro -- bash -c "echo 'DISPLAY CHSTATUS(*) STATUS MSGS' | runmqsc APPQM_RO"
+
+
+-----------------------------------------
+
+
+# Verify the deployment name
+oc get deployments -n roco-dev | findstr -i "wq22"
+
+# List ALL queues on WQ22 to confirm if it's there at all
+oc exec -n roco-dev deployment/qm-wq22 -- bash -c "echo 'DISPLAY Q(RO.*)' | runmqsc WQ22"
+
+# Try as QREMOTE in case migration converted it
+oc exec -n roco-dev deployment/qm-wq22 -- bash -c "echo 'DISPLAY QREMOTE(RO.TH.WRQN.WQ22.HLN.YSRC.XL21)' | runmqsc WQ22"
+
+# Generic any-type
+oc exec -n roco-dev deployment/qm-wq22 -- bash -c "echo 'DISPLAY QUEUE(RO.TH.WRQN.WQ22.HLN.YSRC.XL21) QTYPE' | runmqsc WQ22"
