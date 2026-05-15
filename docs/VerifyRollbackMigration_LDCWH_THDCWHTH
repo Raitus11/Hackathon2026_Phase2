@@ -1,1 +1,15 @@
-Invoke-RestMethod http://localhost:8080/migrations/6 | ConvertTo-Json -Depth 5
+# 1. Source QLOCAL restored (inverse of step 4: DELETE QLOCAL)
+# Expected: TYPE(QLOCAL) CURDEPTH(0)
+oc exec -n roco-dev deployment/qm-wq22 -- bash -c "echo 'DISPLAY QLOCAL(RO.TH.WRQN.WQ22.HLN.YSRC.XL21)' | runmqsc WQ22"
+
+# 2. Bridge XMITQ deleted on source (inverse of step 0: DEFINE QXMIT)
+# Expected: AMQ8147E queue not found
+oc exec -n roco-dev deployment/qm-wq22 -- bash -c "echo 'DISPLAY QLOCAL(APPQM_LDCWH_TH.XMIT)' | runmqsc WQ22"
+
+# 3. Bridge SDR channel deleted on source (inverse of step 2: DEFINE CHANNEL SDR)
+# Expected: AMQ8147E channel not found
+oc exec -n roco-dev deployment/qm-wq22 -- bash -c "echo 'DISPLAY CHANNEL(WQ22.APPQM_.994F)' | runmqsc WQ22"
+
+# 4. Bridge RCVR channel deleted on target (inverse of step 1: DEFINE CHANNEL RCVR)
+# Expected: AMQ8147E channel not found
+oc exec -n roco-dev deployment/qm-appqm-ldcwh-th -- bash -c "echo 'DISPLAY CHANNEL(WQ22.APPQM_.994F)' | runmqsc APPQM_LDCWH_TH"
