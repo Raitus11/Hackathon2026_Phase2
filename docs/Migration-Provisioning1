@@ -13,3 +13,6 @@ $a.entries | Where-Object { $_.lamport_clock -eq 758 } | ForEach-Object { $_.res
 
 $m = Invoke-RestMethod "http://localhost:8080/migrations/1"
 $m.steps | Select-Object step_index, audit_op, succeeded, error_message | Format-Table
+
+$a = Invoke-RestMethod "http://localhost:8080/migrations/1/audit?limit=300"
+$a.entries | Where-Object { -not $_.success } | Select-Object lamport_clock, operation, qm_name, error_message | Format-Table -AutoSize
