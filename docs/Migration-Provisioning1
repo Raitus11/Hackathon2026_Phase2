@@ -1,3 +1,11 @@
 $runs = Invoke-RestMethod "http://localhost:8080/topologies/1/realize-mq-objects"
 $latest = $runs | Sort-Object started_at -Descending | Select-Object -First 1
 $latest.progress | Where-Object { $_.status -eq "FAILED" } | Select-Object -First 1 | Format-List
+
+
+
+
+
+$a = Invoke-RestMethod "http://localhost:8080/migrations/1/audit?limit=300"
+$a.entries | Where-Object { $_.lamport_clock -eq 758 } | Select-Object operation, error_message | Format-List
+$a.entries | Where-Object { $_.lamport_clock -eq 758 } | ForEach-Object { $_.response_payload | ConvertTo-Json -Depth 6 }
