@@ -1,0 +1,3 @@
+$runs = Invoke-RestMethod "http://localhost:8080/topologies/1/realize-mq-objects"
+$latest = $runs | Sort-Object started_at -Descending | Select-Object -First 1
+$latest.progress | Where-Object { $_.status -eq "FAILED" } | Select-Object -First 1 | Format-List
