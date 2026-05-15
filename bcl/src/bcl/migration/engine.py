@@ -746,15 +746,26 @@ async def _do_rewiring(
 
 
 def _is_idempotent_ok(result: Any) -> bool:
-    """Treat 'already exists' / 'already running' AMQ codes as success.
+    """Treat 'already exists' / 'already running' / 'not found on DELETE'
+    AMQ codes as success.
 
     Mirrors the realize-engine's idempotency posture for the apply
-    direction. We reuse the same code set: AMQ8350 (queue exists),
-    AMQ8013 (existing object cannot be replaced), AMQ8348 (already
-    defined), AMQ9508 (channel already started), AMQ9509 (channel
-    program ended — transient).
+    direction. We reuse the same code set:
+      AMQ8350 - queue exists (DEFINE)
+      AMQ8013 - existing object cannot be replaced (DEFINE)
+      AMQ8348 - already defined (DEFINE)
+      AMQ9508 - channel already started (START)
+      AMQ9509 - channel program ended (transient)
+      AMQ8147 - object not found (DELETE — idempotent: a prior migration
+                or rollback already removed it)
+      AMQ8016 - channel not found (DELETE — same rationale)
+      AMQ8260 - channel disposition not found (DELETE — same rationale)
     """
-    ok = frozenset({"AMQ8350E", "AMQ8013E", "AMQ8348E", "AMQ9508E", "AMQ9509E"})
+    ok = frozenset({
+        "AMQ8350E", "AMQ8013E", "AMQ8348E",
+        "AMQ9508E", "AMQ9509E",
+        "AMQ8147E", "AMQ8016E", "AMQ8260E",
+    })
     if not result.per_command:
         return False
     first = result.per_command[0].amq_code
