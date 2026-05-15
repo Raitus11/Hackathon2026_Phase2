@@ -1,0 +1,17 @@
+# 1. Show QREMOTE wiring (proof the bridge exists on producer side)
+oc exec -n roco-dev deployment/qm-appqm-ro -- bash -c "echo 'DISPLAY QREMOTE(RO.TH.WRQN.WQ22.HLN.YSRC.XL21) RNAME RQMNAME XMITQ' | runmqsc APPQM_RO"
+
+# 2. Source-side depth BEFORE
+oc exec -n roco-dev deployment/qm-wq22 -- bash -c "echo 'DISPLAY QLOCAL(RO.TH.WRQN.WQ22.HLN.YSRC.XL21) CURDEPTH' | runmqsc WQ22"
+
+# 3. PUT message on migrated producer
+oc exec -n roco-dev deployment/qm-appqm-ro -- bash -c "echo 'demo-msg-judge' | /opt/mqm/samp/bin/amqsput RO.TH.WRQN.WQ22.HLN.YSRC.XL21 APPQM_RO"
+
+# 4. Source-side depth AFTER (CURDEPTH(1) = bridge routed it)
+oc exec -n roco-dev deployment/qm-wq22 -- bash -c "echo 'DISPLAY QLOCAL(RO.TH.WRQN.WQ22.HLN.YSRC.XL21) CURDEPTH' | runmqsc WQ22"
+
+# 5. GET it (Ctrl+C after 'demo-msg-judge' prints)
+oc exec -n roco-dev deployment/qm-wq22 -- bash -c "/opt/mqm/samp/bin/amqsget RO.TH.WRQN.WQ22.HLN.YSRC.XL21 WQ22"
+
+# 6. Bridge channel status + msg counter
+oc exec -n roco-dev deployment/qm-appqm-ro -- bash -c "echo 'DISPLAY CHSTATUS(*) STATUS MSGS' | runmqsc APPQM_RO"
