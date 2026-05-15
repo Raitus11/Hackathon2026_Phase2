@@ -1,0 +1,48 @@
+# ─────────────────────────────────────────────────────────────────────────
+# IntelliAI 2.0 — BCL configuration (Phase 2 hackathon)
+#
+# This file is read by bcl.config.Settings via pydantic-settings.
+# Prefix: BCL_  →  e.g. BCL_LLM_PROVIDER becomes settings.llm_provider.
+#
+# Save as: D:\Hackathon2026Phase2\intelliai2doto\bcl\.env
+# (location: same dir as pyproject.toml)
+# ─────────────────────────────────────────────────────────────────────────
+
+# ─── Environment ─────────────────────────────────────────────────────────
+BCL_ENVIRONMENT=dev
+BCL_LOG_LEVEL=INFO
+
+# ─── LLM provider ────────────────────────────────────────────────────────
+# Choose one: groq | tachyon | stub
+#   - stub:    no LLM call, deterministic plan used. Demo-safe, offline.
+#   - groq:    home laptop (free tier). Set BCL_GROQ_API_KEY below.
+#   - tachyon: office laptop (Wells Fargo internal). Set endpoint + key.
+BCL_LLM_PROVIDER=stub
+
+# Groq (home laptop)
+BCL_GROQ_API_KEY=
+BCL_GROQ_MODEL=llama-3.3-70b-versatile
+
+# Tachyon (office laptop)
+BCL_TACHYON_ENDPOINT=
+BCL_TACHYON_API_KEY=
+BCL_TACHYON_MODEL=gemini-2.5-pro
+
+# LLM call tuning
+BCL_LLM_REQUEST_TIMEOUT_SECONDS=60
+BCL_LLM_MAX_TOKENS=2048
+BCL_LLM_TEMPERATURE=0.2
+
+# ─── Kubernetes / OpenShift ──────────────────────────────────────────────
+BCL_NAMESPACE=roco-dev
+BCL_IN_CLUSTER=false
+BCL_KUBE_REQUEST_TIMEOUT_SECONDS=30
+
+# ─── Migration tuning ────────────────────────────────────────────────────
+BCL_DRAIN_WAIT_TIMEOUT_SECONDS=300
+BCL_DRAIN_POLL_INTERVAL_MS=500
+BCL_DRAIN_ZERO_WINDOW_POLLS=3
+
+# ─── HTTP / CORS ─────────────────────────────────────────────────────────
+# Comma-separated list. JSON form also accepted.
+BCL_CORS_ALLOW_ORIGINS=["http://localhost:3000"]

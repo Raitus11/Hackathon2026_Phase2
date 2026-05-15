@@ -294,9 +294,21 @@ async def get_migration_audit(
 
     # Fetch every audit entry sharing that correlation_id, ascending
     # Lamport order (causal order).
+    #
+    # Manual rollbacks (POST /migrations/{id}/rollback) write audit
+    # entries under a separate correlation_id of the form
+    # `rollback-{migration_id}-{epoch}`. Include those too so the UI's
+    # Lamport timeline shows the full causal story (forward steps,
+    # then ROLLBACK_INITIATED, ROLLBACK_STEP rows, ROLLBACK_COMPLETED).
+    # Without this, a manually rolled-back migration shows state=
+    # ROLLED_BACK with no rollback entries in the timeline.
+    rollback_cid_prefix = f"rollback-{migration_id}-"
     entry_stmt = (
         select(AuditLog)
-        .where(AuditLog.correlation_id == correlation_id)
+        .where(
+            (AuditLog.correlation_id == correlation_id)
+            | AuditLog.correlation_id.like(f"{rollback_cid_prefix}%")
+        )
         .order_by(AuditLog.lamport_clock.asc())
         .limit(limit)
     )
