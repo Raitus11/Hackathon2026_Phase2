@@ -1,11 +1,13 @@
+# Source-side QLOCAL restored on WQ22 ✓ (you already verified — TYPE(QLOCAL) CURDEPTH(0))
 
-# Should be TYPE(QLOCAL) again on WQ22 (source side)
-oc exec -n roco-dev deployment/qm-wq22 -- bash -c "echo 'DISPLAY QLOCAL(RO.TH.WRQN.WQ22.HLN.YSRC.XL21) CURDEPTH' | runmqsc WQ22"
+# Bridge channel WQ22.APPQM_.994F should be GONE on WQ22 source side
+oc exec -n roco-dev deployment/qm-wq22 -- bash -c "echo 'DISPLAY CHANNEL(WQ22.APPQM_.994F)' | runmqsc WQ22"
+# Expected: AMQ8147 channel not found
 
-# Should be TYPE(QREMOTE) gone on APPQM_RO
-oc exec -n roco-dev deployment/qm-appqm-ro -- bash -c "echo 'DISPLAY QREMOTE(RO.TH.WRQN.WQ22.HLN.YSRC.XL21)' | runmqsc APPQM_RO"
-# Expected: AMQ8147 not found (QREMOTE was deleted)
+# Bridge XMITQ APPQM_LDCWH_TH.XMIT should be GONE on WQ22
+oc exec -n roco-dev deployment/qm-wq22 -- bash -c "echo 'DISPLAY QLOCAL(APPQM_LDCWH_TH.XMIT)' | runmqsc WQ22"
+# Expected: AMQ8147 queue not found
 
-# Bridge SDR should be stopped/deleted
-oc exec -n roco-dev deployment/qm-appqm-ro -- bash -c "echo 'DISPLAY CHANNEL(RO.TO.LDCWHTH)' | runmqsc APPQM_RO"
+# RCVR on target side should be GONE too
+oc exec -n roco-dev deployment/qm-appqm-ldcwh-th -- bash -c "echo 'DISPLAY CHANNEL(WQ22.APPQM_.994F)' | runmqsc APPQM_LDCWH_TH"
 # Expected: AMQ8147 channel not found
