@@ -852,6 +852,29 @@ async def _do_drain_wait(
             await session.commit()
 
         if not outcome.drained:
+            # Tolerate drain probe error_kinds that mean "queue is not
+            # a QLOCAL on source" — a prior migration converted it to
+            # a QREMOTE, so the desired drain post-state (no QLOCAL
+            # backlog on source) is already true.
+            #
+            #   queue_not_found     — already deleted
+            #   mqsc_error          — DISPLAY QLOCAL failed (object is
+            #                         not QLOCAL anymore)
+            #   no_attrs_in_output  — runmqsc returned without
+            #                         CURDEPTH/IPPROCS/OPPROCS (same
+            #                         root cause as mqsc_error)
+            #
+            # timeout is NOT tolerated — that's a real drain budget
+            # exceeded and means μ is too slow; operator must investigate.
+            if outcome.error_kind in (
+                "queue_not_found", "mqsc_error", "no_attrs_in_output",
+            ):
+                all_drains[-1]["note"] = (
+                    "drain skipped — queue is not a QLOCAL on source "
+                    "(likely already migrated by a previous run); "
+                    "desired post-state achieved"
+                )
+                continue
             return False, (
                 f"drain wait failed for {source_qm}/{q}: "
                 f"error_kind={outcome.error_kind} "
