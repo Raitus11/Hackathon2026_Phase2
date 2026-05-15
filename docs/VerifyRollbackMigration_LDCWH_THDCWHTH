@@ -1,2 +1,1 @@
-# Check what MigrationStep rows exist for migration #6
-curl http://localhost:8080/migrations/6 | findstr /i "step"
+Invoke-RestMethod http://localhost:8080/migrations/6 | ConvertTo-Json -Depth 5
