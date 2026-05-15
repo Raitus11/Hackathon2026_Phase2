@@ -1,0 +1,25 @@
+"Target topology is fully realized. Seven dedicated target QMs."
+"Producer PUTs to its local QM. Message arrives on a different QM. The bridge SDR channel is the data path — runmqsc shows MSGS(3) on RO.TO.LDCWHTH. No producer or consumer reconfiguration occurred."
+"BCL is the control plane. UI clicks generated MQSC. MQSC produced this state. Now I'm bypassing the UI entirely and running runmqsc directly to show the state is real."
+
+
+Verify deplyment name first
+oc get deployments -n roco-dev | findstr -i "ldcwh"
+
+# 1. QREMOTE wiring on producer (APPQM_RO → points at APPQM_LDCWH_TH)
+oc exec -n roco-dev deployment/qm-appqm-ro -- bash -c "echo 'DISPLAY QREMOTE(RO.TH.WRQN.WQ22.HLN.YSRC.XL21) RNAME RQMNAME XMITQ' | runmqsc APPQM_RO"
+
+# 2. Depth BEFORE on the real QLOCAL (now on APPQM_LDCWH_TH)
+oc exec -n roco-dev deployment/qm-appqm-ldcwh-th -- bash -c "echo 'DISPLAY QLOCAL(RO.TH.WRQN.WQ22.HLN.YSRC.XL21) CURDEPTH' | runmqsc APPQM_LDCWH_TH"
+
+# 3. PUT on migrated producer
+oc exec -n roco-dev deployment/qm-appqm-ro -- bash -c "echo 'demo-msg-judge' | /opt/mqm/samp/bin/amqsput RO.TH.WRQN.WQ22.HLN.YSRC.XL21 APPQM_RO"
+
+# 4. Depth AFTER on APPQM_LDCWH_TH (CURDEPTH(1) = bridge routed it, QM-to-QM)
+oc exec -n roco-dev deployment/qm-appqm-ldcwh-th -- bash -c "echo 'DISPLAY QLOCAL(RO.TH.WRQN.WQ22.HLN.YSRC.XL21) CURDEPTH' | runmqsc APPQM_LDCWH_TH"
+
+# 5. GET it off the target QM (Ctrl+C after 'demo-msg-judge')
+oc exec -n roco-dev deployment/qm-appqm-ldcwh-th -- bash -c "/opt/mqm/samp/bin/amqsget RO.TH.WRQN.WQ22.HLN.YSRC.XL21 APPQM_LDCWH_TH"
+
+# 6. Bridge channel status + msg counter on producer
+oc exec -n roco-dev deployment/qm-appqm-ro -- bash -c "echo 'DISPLAY CHSTATUS(*) STATUS MSGS' | runmqsc APPQM_RO"
