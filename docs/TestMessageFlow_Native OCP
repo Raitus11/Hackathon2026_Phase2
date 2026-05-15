@@ -1,3 +1,8 @@
+"Target topology is fully realized. Seven dedicated target QMs."
+"Producer PUTs to its local QM. Message arrives on a different QM. The bridge SDR channel is the data path — runmqsc shows MSGS(3) on RO.TO.LDCWHTH. No producer or consumer reconfiguration occurred."
+"BCL is the control plane. UI clicks generated MQSC. MQSC produced this state. Now I'm bypassing the UI entirely and running runmqsc directly to show the state is real."
+
+
 Verify deplyment name first
 oc get deployments -n roco-dev | findstr -i "ldcwh"
 
