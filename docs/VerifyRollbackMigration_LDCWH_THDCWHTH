@@ -1,13 +1,2 @@
-# Source-side QLOCAL restored on WQ22 ✓ (you already verified — TYPE(QLOCAL) CURDEPTH(0))
-
-# Bridge channel WQ22.APPQM_.994F should be GONE on WQ22 source side
-oc exec -n roco-dev deployment/qm-wq22 -- bash -c "echo 'DISPLAY CHANNEL(WQ22.APPQM_.994F)' | runmqsc WQ22"
-# Expected: AMQ8147 channel not found
-
-# Bridge XMITQ APPQM_LDCWH_TH.XMIT should be GONE on WQ22
-oc exec -n roco-dev deployment/qm-wq22 -- bash -c "echo 'DISPLAY QLOCAL(APPQM_LDCWH_TH.XMIT)' | runmqsc WQ22"
-# Expected: AMQ8147 queue not found
-
-# RCVR on target side should be GONE too
-oc exec -n roco-dev deployment/qm-appqm-ldcwh-th -- bash -c "echo 'DISPLAY CHANNEL(WQ22.APPQM_.994F)' | runmqsc APPQM_LDCWH_TH"
-# Expected: AMQ8147 channel not found
+# Check what MigrationStep rows exist for migration #6
+curl http://localhost:8080/migrations/6 | findstr /i "step"
