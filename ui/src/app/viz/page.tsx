@@ -364,6 +364,36 @@ const CANNED_AUDIT_RESPONSE: MigrationAuditResponse = {
   entries: CANNED_AUDIT_ENTRIES,
 };
 
+// The 7 completed migrations, mirroring the real /migrations list so the
+// choreography dropdown is populated identically to live mode. #6 LDCWH/TH
+// carries the full hand-authored plan (CANNED_MIGRATION); the siblings reuse
+// the same plan shape re-tagged to their app — enough for the picker and the
+// step-replay, which is state-machine driven and app-agnostic.
+const _CANNED_APPS: { id: number; app: string }[] = [
+  { id: 7, app: "ZN" },
+  { id: 6, app: "LDCWH/TH" },
+  { id: 5, app: "HMR/QX" },
+  { id: 4, app: "RO" },
+  { id: 3, app: "JUUD/C9" },
+  { id: 2, app: "APUMN/GC" },
+  { id: 1, app: "LIY/KW" },
+];
+
+const CANNED_MIGRATIONS: Migration[] = _CANNED_APPS.map(({ id, app }) =>
+  id === CANNED_MIGRATION.id
+    ? CANNED_MIGRATION
+    : { ...CANNED_MIGRATION, id, app_id: app },
+);
+
+/** Audit response for a canned migration id — same step trace, re-tagged. */
+function cannedAuditFor(id: number): MigrationAuditResponse {
+  return {
+    ...CANNED_AUDIT_RESPONSE,
+    migration_id: id,
+    correlation_id: `mig-${id}-fake000`,
+  };
+}
+
 const CANNED_TEST_MESSAGE_RESULT: TestMessageResult = {
   correlation_id: "msgflow-demo-000",
   topology_id: 0,
@@ -991,7 +1021,7 @@ function ChoreographyView() {
     () => bcl.migrations.list(),
     { refreshInterval: 0 },
   );
-  const allMigrations = LIVE_DATA ? liveMigrations : [CANNED_MIGRATION];
+  const allMigrations = LIVE_DATA ? liveMigrations : CANNED_MIGRATIONS;
   const replayable = useMemo(
     () =>
       (allMigrations ?? [])
@@ -1012,10 +1042,14 @@ function ChoreographyView() {
     }
   }, [replayable, selectedMigrationId]);
 
-  // Load the selected migration's detail + audit. When LIVE_DATA is false
-  // and the selected ID is the canned one, fall back to fixtures.
-  const isCannedSelection =
-    !LIVE_DATA && String(selectedMigrationId) === String(CANNED_MIGRATION.id);
+  // Load the selected migration's detail + audit. When LIVE_DATA is false,
+  // any selected id is a canned one — resolve from the canned fixtures.
+  const cannedSelected = !LIVE_DATA
+    ? CANNED_MIGRATIONS.find(
+        (m) => String(m.id) === String(selectedMigrationId),
+      ) ?? null
+    : null;
+  const isCannedSelection = !LIVE_DATA && cannedSelected !== null;
 
   const { data: liveMigration } = useSWR<Migration>(
     LIVE_DATA && selectedMigrationId
@@ -1024,7 +1058,7 @@ function ChoreographyView() {
     () => bcl.migrations.get(selectedMigrationId),
     { refreshInterval: 0 },
   );
-  const migration = isCannedSelection ? CANNED_MIGRATION : liveMigration;
+  const migration = isCannedSelection ? cannedSelected : liveMigration;
 
   const { data: liveAuditResp } = useSWR<MigrationAuditResponse>(
     LIVE_DATA && selectedMigrationId
@@ -1033,7 +1067,9 @@ function ChoreographyView() {
     () => bcl.migrations.audit(selectedMigrationId, 500),
     { refreshInterval: 0 },
   );
-  const auditResp = isCannedSelection ? CANNED_AUDIT_RESPONSE : liveAuditResp;
+  const auditResp = isCannedSelection
+    ? cannedAuditFor(Number(selectedMigrationId))
+    : liveAuditResp;
 
   const entries: MigrationAuditEntry[] = auditResp?.entries ?? [];
 
@@ -1204,9 +1240,58 @@ function ChoreographyView() {
                     setStep(i);
                     setPlaying(false);
                   }}
-                  className="flex flex-col items-center gap-1"
-                  title={slot ? `LC=${slot.lamport} · ${slot.wallClock}` : "no audit row"}
+                  className="group relative flex flex-col items-center gap-1"
                 >
+                  {/* Hover tooltip — CSS-only, no JS. Shows the step's
+                      audit facts: LC, wall-clock, status, MQSC. */}
+                  <div
+                    className={
+                      "pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 " +
+                      "w-56 -translate-x-1/2 rounded border border-border-subtle " +
+                      "bg-bg-base p-2 text-left opacity-0 shadow-lg transition-opacity " +
+                      "group-hover:opacity-100"
+                    }
+                  >
+                    <div className="mb-1 flex items-baseline justify-between">
+                      <span className="font-mono text-[11px] font-medium text-fg">
+                        {s.state}
+                      </span>
+                      <span
+                        className={
+                          "text-[9px] uppercase tracking-wider " +
+                          (failedHere
+                            ? "text-danger"
+                            : ran
+                              ? "text-success"
+                              : "text-fg-subtle")
+                        }
+                      >
+                        {failedHere
+                          ? "failed"
+                          : isCurrent
+                            ? "current"
+                            : ran
+                              ? "ran"
+                              : "pending"}
+                      </span>
+                    </div>
+                    {slot ? (
+                      <div className="font-mono text-[9px] text-fg-muted">
+                        LC={slot.lamport} ·{" "}
+                        {slot.wallClock?.replace("T", " ").slice(0, 19)}
+                      </div>
+                    ) : (
+                      <div className="font-mono text-[9px] text-fg-subtle">
+                        no audit row
+                      </div>
+                    )}
+                    <div className="mt-1 break-words font-mono text-[9px] text-accent">
+                      {slot?.mqsc || s.mqsc}
+                    </div>
+                    <div className="mt-1 text-[9px] leading-snug text-fg-subtle">
+                      {s.rationale}
+                    </div>
+                  </div>
                   <div
                     className={
                       "h-3 w-3 rounded-full transition-all " +
