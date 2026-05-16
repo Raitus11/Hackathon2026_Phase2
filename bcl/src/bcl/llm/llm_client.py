@@ -43,6 +43,7 @@ References:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -54,6 +55,29 @@ import httpx
 from bcl.config import Settings, get_settings
 
 logger = logging.getLogger("bcl.llm.client")
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Tachyon client — lazy module-global
+# ─────────────────────────────────────────────────────────────────────────
+#
+# Tachyon is reached through Wells Fargo's `tachyon-langchain-client`
+# package, NOT a hand-rolled REST call. The package owns the Apigee
+# OAuth handshake (CONSUMER_KEY/SECRET -> APIGEE_URL -> bearer token),
+# the corporate-CA TLS bundle (CERTS_PATH), and the gateway headers.
+# It reads all of that from os.environ — the same variable names Phase 1
+# used (API_KEY, CONSUMER_KEY, CONSUMER_SECRET, APIGEE_URL, BASE_URL,
+# CERTS_PATH, USE_CASE_ID). It is the proven path; a raw httpx POST is
+# not, because Tachyon is not a plain OpenAI-compatible endpoint.
+#
+# The client is constructed once and cached. Construction is cheap but
+# not free (it may mint an Apigee token), so we lazy-init on first use.
+
+_tachyon_client: Any = None
+_tachyon_client_failed: bool = False
+"""Set True once construction has failed, so we don't retry the import/
+init on every call — a missing package or bad creds won't recover within
+a process lifetime, and the caller's deterministic fallback handles it."""
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -297,8 +321,63 @@ async def _call_groq(
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Tachyon backend (WF-internal — assumed OpenAI-compatible per common pattern)
+# Tachyon backend (WF-internal — via the tachyon-langchain-client package)
 # ─────────────────────────────────────────────────────────────────────────
+
+
+def _get_tachyon_client(settings: Settings) -> Any:
+    """Lazy-init the TachyonLangchainClient. Cached module-global.
+
+    Mirrors Phase 1's proven `_get_client()`: load the .env into
+    os.environ (the package reads its Apigee creds from there), import
+    the package, construct it with only `model_name`. Raises
+    LLMConfigError on any failure so the caller falls back deterministically.
+    """
+    global _tachyon_client, _tachyon_client_failed
+
+    if _tachyon_client is not None:
+        return _tachyon_client
+    if _tachyon_client_failed:
+        raise LLMConfigError(
+            "Tachyon client init previously failed this process; "
+            "not retrying. Check the package install and .env Apigee creds."
+        )
+
+    try:
+        # The package reads API_KEY / CONSUMER_KEY / CONSUMER_SECRET /
+        # APIGEE_URL / BASE_URL / CERTS_PATH / USE_CASE_ID from os.environ.
+        # pydantic-settings populates the Settings object but NOT
+        # os.environ, so we must load the .env explicitly here.
+        try:
+            from dotenv import load_dotenv
+
+            load_dotenv()
+        except ImportError:
+            # python-dotenv absent — rely on OS env vars already being set.
+            logger.warning(
+                "python-dotenv not installed; Tachyon will use OS env vars only"
+            )
+
+        from tachyon_langchain_client import TachyonLangchainClient
+
+        _tachyon_client = TachyonLangchainClient(
+            model_name=settings.tachyon_model
+        )
+        logger.info(
+            "Tachyon client initialized (model=%s)", settings.tachyon_model
+        )
+        return _tachyon_client
+    except ImportError as exc:
+        _tachyon_client_failed = True
+        raise LLMConfigError(
+            "tachyon-langchain-client is not installed in this venv. "
+            "Install it or set BCL_LLM_PROVIDER=stub for the offline path."
+        ) from exc
+    except Exception as exc:  # noqa: BLE001 - any init failure -> fallback
+        _tachyon_client_failed = True
+        raise LLMConfigError(
+            f"failed to initialise Tachyon client: {type(exc).__name__}: {exc}"
+        ) from exc
 
 
 async def _call_tachyon(
@@ -311,64 +390,78 @@ async def _call_tachyon(
     temperature: float,
     json_mode: bool,
 ) -> LLMResponse:
-    if not settings.tachyon_endpoint:
-        raise LLMConfigError(
-            "BCL_LLM_PROVIDER=tachyon but BCL_TACHYON_ENDPOINT is empty"
+    """Call Tachyon via the tachyon-langchain-client package.
+
+    The package's client subclasses LangChain's ChatOpenAI, so the call
+    shape is `client.invoke(messages)` -> message object with `.content`.
+    That call is synchronous and may block (network + Apigee token), so
+    it is run in a worker thread to keep the event loop free.
+
+    `max_tokens` / `temperature` are accepted for signature parity with
+    `_call_groq`; the Phase-1-proven construction does not pass them per
+    call (the client is built once with model_name only). If per-call
+    tuning is later needed, that is a change inside this function alone.
+    """
+    client = _get_tachyon_client(settings)  # raises LLMConfigError -> fallback
+
+    # json_mode: Tachyon's gateway may not honour an OpenAI-style
+    # response_format knob. We enforce JSON the same way the rest of the
+    # system already does — by instruction in the prompt — and the caller
+    # (run_structured_agent) validates with Pydantic regardless. Append a
+    # terse JSON instruction so a structured call still nudges the model.
+    sys_prompt = system_prompt
+    if json_mode:
+        sys_prompt = (
+            system_prompt
+            + "\n\nIMPORTANT: Respond with a single valid JSON object only. "
+            "No markdown fences, no prose before or after."
         )
 
-    # Tachyon is assumed to expose an OpenAI-compatible /v1/chat/completions.
-    # If the real endpoint differs, this is the single place to adapt.
-    url = settings.tachyon_endpoint.rstrip("/") + "/v1/chat/completions"
-    body: dict[str, Any] = {
-        "model": settings.tachyon_model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-    }
-    if json_mode:
-        body["response_format"] = {"type": "json_object"}
-
-    headers: dict[str, str] = {"Content-Type": "application/json"}
-    if settings.tachyon_api_key:
-        headers["Authorization"] = f"Bearer {settings.tachyon_api_key}"
+    messages = [
+        {"role": "system", "content": sys_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
 
     t0 = time.monotonic()
     try:
-        async with httpx.AsyncClient(timeout=timeout, verify=False) as client:
-            # verify=False: WF internal endpoints often have self-signed
-            # certs. In production this would be replaced with the WF
-            # corporate CA bundle.
-            resp = await client.post(url, json=body, headers=headers)
-    except httpx.TimeoutException as exc:
+        # Sync .invoke run in a worker thread + an asyncio timeout so a
+        # hung gateway cannot stall the migration. wait_for cancels the
+        # await; the worker thread is daemonic and abandoned on timeout.
+        result = await asyncio.wait_for(
+            asyncio.to_thread(client.invoke, messages),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError as exc:
         raise LLMTimeoutError(f"tachyon timeout after {timeout}s") from exc
-    except httpx.HTTPError as exc:
-        raise LLMProviderError(0, f"transport error: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001 - any call failure -> fallback
+        # Rate-limit / auth / transport all surface here. The caller
+        # catches LLMError and runs the deterministic fallback.
+        raise LLMProviderError(0, f"tachyon call failed: {exc}") from exc
 
     duration_ms = int((time.monotonic() - t0) * 1000)
 
-    if resp.status_code >= 400:
-        raise LLMProviderError(resp.status_code, resp.text)
+    # ChatOpenAI-style response: a message object with `.content`.
+    text = getattr(result, "content", None)
+    if not text or not str(text).strip():
+        raise LLMProviderError(0, f"tachyon returned empty content: {result!r}")
 
-    data = resp.json()
-    try:
-        text = data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError) as exc:
-        raise LLMProviderError(
-            resp.status_code, f"unexpected response shape: {data}"
-        ) from exc
+    # Token usage, if the package surfaces it (LangChain puts it in
+    # response_metadata / usage_metadata). Best-effort; None is fine.
+    tokens_in: int | None = None
+    tokens_out: int | None = None
+    usage = getattr(result, "usage_metadata", None)
+    if isinstance(usage, dict):
+        tokens_in = usage.get("input_tokens")
+        tokens_out = usage.get("output_tokens")
 
-    usage = data.get("usage", {}) or {}
     return LLMResponse(
-        text=text or "",
+        text=str(text),
         model=f"tachyon:{settings.tachyon_model}",
-        tokens_in=usage.get("prompt_tokens"),
-        tokens_out=usage.get("completion_tokens"),
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
         duration_ms=duration_ms,
         backend="tachyon",
-        raw_response=data,
+        raw_response=None,
     )
 
 
