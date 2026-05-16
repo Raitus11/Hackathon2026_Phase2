@@ -71,12 +71,8 @@ class Settings(BaseSettings):
     mqsc_admin_rest_timeout_seconds: int = 10
 
     # ─── LLM provider ────────────────────────────────────────────────
-    # Local dev: groq. Office laptop: tachyon. Single-file swap.
-    llm_provider: Literal["groq", "tachyon", "stub"] = "groq"
-
-    # Groq
-    groq_api_key: str = ""
-    groq_model: str = "llama-3.3-70b-versatile"
+    # Office laptop: tachyon. stub: offline deterministic path.
+    llm_provider: Literal["tachyon", "stub"] = "stub"
 
     # Tachyon (office laptop)
     tachyon_endpoint: str = ""

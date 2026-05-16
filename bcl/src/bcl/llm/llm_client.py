@@ -1,4 +1,4 @@
-"""LLM client — provider-agnostic facade over Groq / Tachyon / stub.
+"""LLM client — provider-agnostic facade over Tachyon / stub.
 
 The BCL talks to language models through exactly this module. Agents
 import `complete_structured` (or `complete_text` for free-form output)
@@ -6,12 +6,10 @@ and never reach for HTTP directly.
 
 Backends:
 
-  - groq:    public Groq inference API. Used on home laptops where
-             Tachyon is unreachable. Free tier; rate-limited.
   - tachyon: Wells Fargo's internal LLM gateway exposing Gemini 2.5
              Pro and friends. Used on office laptops where the network
-             reaches https://tachyon.internal.wellsfargo.com (or similar
-             - the actual URL is in BCL_TACHYON_ENDPOINT).
+             reaches the Tachyon Apigee gateway. Reached through the
+             `tachyon-langchain-client` package.
   - stub:    a deterministic in-process echo backend. Returns a
              constant JSON shape. Used in tests and when the operator
              explicitly wants the system to NEVER call out to a model
@@ -36,7 +34,6 @@ Design notes:
 
 References:
 
-  - Groq API: https://console.groq.com/docs/api-reference
   - Gemini structured output: https://ai.google.dev/gemini-api/docs/structured-output
   - Anthropic, "Building effective agents" (2024-12).
 """
@@ -90,7 +87,7 @@ class LLMResponse:
     """One LLM completion result.
 
     `model` is the fully-qualified model identifier including the
-    backend prefix (e.g. 'groq:llama-3.3-70b-versatile'). This goes
+    backend prefix (e.g. 'tachyon:gemini-2.5-pro'). This goes
     straight into AgentInvocation.model so the audit log can answer
     "which model said what" without separate joins.
     """
@@ -100,13 +97,13 @@ class LLMResponse:
     the caller must json.loads this; the client does not parse."""
 
     model: str
-    """Backend-prefixed model identifier — e.g. 'groq:llama-3.3-70b-versatile'."""
+    """Backend-prefixed model identifier — e.g. 'tachyon:gemini-2.5-pro'."""
 
     tokens_in: int | None
     tokens_out: int | None
     duration_ms: int
 
-    backend: Literal["groq", "tachyon", "stub"]
+    backend: Literal["tachyon", "stub"]
     """Which backend served this. Surfaces in audit log."""
 
     raw_response: dict[str, Any] | None = None
@@ -169,16 +166,6 @@ async def complete_text(
     max_tok = max_tokens or settings.llm_max_tokens
     temp = temperature if temperature is not None else settings.llm_temperature
 
-    if backend == "groq":
-        return await _call_groq(
-            settings=settings,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            timeout=timeout,
-            max_tokens=max_tok,
-            temperature=temp,
-            json_mode=False,
-        )
     if backend == "tachyon":
         return await _call_tachyon(
             settings=settings,
@@ -212,8 +199,9 @@ async def complete_structured(
         nudges the backend toward emitting valid JSON and returns the
         raw text. Callers do `json.loads(resp.text)` and validate.
 
-    Both Groq and Tachyon expose a `response_format={type: json_object}`
-    knob (OpenAI-compatible). We pass it where supported.
+    Tachyon's gateway may not honour an OpenAI-style
+    `response_format` knob, so JSON is enforced by prompt instruction
+    (see _call_tachyon) and Pydantic-validated by the caller.
     """
     settings = settings or get_settings()
     backend = settings.llm_provider
@@ -221,16 +209,6 @@ async def complete_structured(
     max_tok = max_tokens or settings.llm_max_tokens
     temp = temperature if temperature is not None else settings.llm_temperature
 
-    if backend == "groq":
-        return await _call_groq(
-            settings=settings,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            timeout=timeout,
-            max_tokens=max_tok,
-            temperature=temp,
-            json_mode=True,
-        )
     if backend == "tachyon":
         return await _call_tachyon(
             settings=settings,
@@ -244,80 +222,6 @@ async def complete_structured(
     if backend == "stub":
         return _stub_response(system_prompt, user_prompt, json_mode=True)
     raise LLMConfigError(f"unknown LLM provider: {backend!r}")
-
-
-# ─────────────────────────────────────────────────────────────────────────
-# Groq backend (OpenAI-compatible)
-# ─────────────────────────────────────────────────────────────────────────
-
-
-_GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
-
-
-async def _call_groq(
-    *,
-    settings: Settings,
-    system_prompt: str,
-    user_prompt: str,
-    timeout: float,
-    max_tokens: int,
-    temperature: float,
-    json_mode: bool,
-) -> LLMResponse:
-    if not settings.groq_api_key:
-        raise LLMConfigError(
-            "BCL_LLM_PROVIDER=groq but BCL_GROQ_API_KEY is empty"
-        )
-
-    body: dict[str, Any] = {
-        "model": settings.groq_model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-    }
-    if json_mode:
-        body["response_format"] = {"type": "json_object"}
-
-    headers = {
-        "Authorization": f"Bearer {settings.groq_api_key}",
-        "Content-Type": "application/json",
-    }
-
-    t0 = time.monotonic()
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(_GROQ_ENDPOINT, json=body, headers=headers)
-    except httpx.TimeoutException as exc:
-        raise LLMTimeoutError(f"groq timeout after {timeout}s") from exc
-    except httpx.HTTPError as exc:
-        raise LLMProviderError(0, f"transport error: {exc}") from exc
-
-    duration_ms = int((time.monotonic() - t0) * 1000)
-
-    if resp.status_code >= 400:
-        raise LLMProviderError(resp.status_code, resp.text)
-
-    data = resp.json()
-    try:
-        text = data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError) as exc:
-        raise LLMProviderError(
-            resp.status_code, f"unexpected response shape: {data}"
-        ) from exc
-
-    usage = data.get("usage", {}) or {}
-    return LLMResponse(
-        text=text or "",
-        model=f"groq:{settings.groq_model}",
-        tokens_in=usage.get("prompt_tokens"),
-        tokens_out=usage.get("completion_tokens"),
-        duration_ms=duration_ms,
-        backend="groq",
-        raw_response=data,
-    )
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -398,9 +302,10 @@ async def _call_tachyon(
     it is run in a worker thread to keep the event loop free.
 
     `max_tokens` / `temperature` are accepted for signature parity with
-    `_call_groq`; the Phase-1-proven construction does not pass them per
-    call (the client is built once with model_name only). If per-call
-    tuning is later needed, that is a change inside this function alone.
+    the other backends; the Phase-1-proven construction does not pass
+    them per call (the client is built once with model_name only). If
+    per-call tuning is later needed, that is a change inside this
+    function alone.
     """
     client = _get_tachyon_client(settings)  # raises LLMConfigError -> fallback
 
@@ -477,9 +382,8 @@ def _stub_response(
 
     The Migration Planner has its own domain-aware fallback in
     bcl.agents.planner.deterministic_plan(); this stub is only used
-    when LLM_PROVIDER=stub is set explicitly (tests, offline demos
-    with no Groq key, etc.) and the caller wants the LLM facade to
-    not crash.
+    when LLM_PROVIDER=stub is set explicitly (tests, offline demos)
+    and the caller wants the LLM facade to not crash.
     """
     if json_mode:
         text = json.dumps({
