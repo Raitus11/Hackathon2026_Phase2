@@ -433,6 +433,44 @@ export interface AssistantAnswer {
   agent_invocation_id: number | null;
 }
 
+// ────────── Reliability — Markov chain analysis ──────────
+
+/**
+ * Response from GET /reliability/markov.
+ *
+ * The migration state machine is an absorbing Markov chain. The
+ * endpoint returns two clearly-separated things:
+ *   - reference_model: absorbing-chain mathematics (fundamental matrix
+ *     N = (I-Q)^-1, expected steps to absorption, absorption
+ *     probabilities) on a STATED reference transition matrix.
+ *   - empirical_estimate: a maximum-likelihood transition estimate
+ *     COUNTED from the real audit log's state transitions.
+ * The reference model is a modelling assumption; the empirical estimate
+ * is a measurement. They are not blurred together.
+ */
+export interface MarkovReferenceModel {
+  expected_steps_to_absorption: Record<string, number>;
+  absorption_probability: Record<string, Record<string, number>>;
+  fundamental_matrix_diagonal: Record<string, number>;
+  notes: string;
+}
+
+export interface MarkovEmpiricalEstimate {
+  transition_counts: Record<string, Record<string, number>>;
+  transition_probabilities: Record<string, Record<string, number>>;
+  total_transitions: number;
+  runs_observed: number;
+  notes: string;
+}
+
+export interface MarkovAnalysis {
+  transient_states: string[];
+  absorbing_states: string[];
+  reference_model: MarkovReferenceModel;
+  empirical_estimate: MarkovEmpiricalEstimate;
+  method_reference: string;
+}
+
 // ────────── Fetch helpers ──────────
 
 async function bclGet<T>(path: string): Promise<T> {
@@ -642,6 +680,16 @@ export const bcl = {
         "/assistant/query",
         { message, session_id: sessionId },
       ),
+  },
+
+  /**
+   * Reliability analysis — absorbing Markov chain on the migration
+   * state machine. Returns the fundamental-matrix mathematics on a
+   * stated reference model, plus an empirical transition estimate
+   * counted from the real audit log.
+   */
+  reliability: {
+    markov: () => bclGet<MarkovAnalysis>("/reliability/markov"),
   },
 };
 

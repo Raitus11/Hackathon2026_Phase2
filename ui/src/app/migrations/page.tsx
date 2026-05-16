@@ -13,6 +13,7 @@ import {
   TERMINAL_STATES,
   type Application,
   type AssistantAnswer,
+  type MarkovAnalysis,
   type Migration,
   type MigrationState,
   type Topology,
@@ -330,6 +331,11 @@ export default function MigrationWorkspace() {
         <OperatorAssistantPanel />
       </section>
 
+      {/* Reliability — absorbing Markov chain analysis */}
+      <section className="mb-6">
+        <ReliabilityPanel />
+      </section>
+
       {/* Action error banner */}
       {error && (
         <div className="fixed bottom-4 right-4 z-50 max-w-md rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-xs">
@@ -606,6 +612,194 @@ function ChatBubble({ turn }: { turn: ChatTurn }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ──────────── Reliability panel (absorbing Markov chain) ────────────
+
+/** Compact human label for a migration state in the Markov tables. */
+function markovStateLabel(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/_/g, " ")
+    .replace(/\bqm\b/, "QM");
+}
+
+/**
+ * Reliability panel — absorbing Markov chain analysis of the migration
+ * state machine.
+ *
+ * The migration state machine is, formally, an absorbing Markov chain.
+ * This panel renders GET /reliability/markov:
+ *   - the reference model's fundamental-matrix results (expected steps
+ *     to absorption, absorption probabilities) — a STATED model;
+ *   - the empirical transition estimate counted from the real audit log
+ *     — a MEASUREMENT, honestly labelled as low-sample.
+ *
+ * Collapsed by default so it does not crowd the workspace; the operator
+ * expands it when they want the math.
+ */
+function ReliabilityPanel() {
+  const [open, setOpen] = useState(false);
+  const { data, error, isLoading } = useSWR<MarkovAnalysis>(
+    open ? "/reliability/markov" : null,
+    () => bcl.reliability.markov(),
+    { refreshInterval: 0, revalidateOnFocus: false },
+  );
+
+  return (
+    <div className="panel">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between border-b border-border-subtle px-4 py-3 text-left"
+      >
+        <div>
+          <h2 className="text-sm font-medium">
+            Reliability · absorbing Markov chain
+          </h2>
+          <p className="mt-0.5 text-xs text-fg-muted">
+            The migration state machine modelled as an absorbing Markov
+            chain. Fundamental matrix N = (I−Q)⁻¹ — expected steps to
+            absorption and absorption probabilities — plus an empirical
+            transition estimate from the real audit log.
+          </p>
+        </div>
+        <span className="ml-3 shrink-0 text-xs text-fg-subtle">
+          {open ? "▲ hide" : "▼ show"}
+        </span>
+      </button>
+
+      {open && (
+        <div className="px-4 py-4">
+          {isLoading && (
+            <p className="py-6 text-center text-xs text-fg-subtle">
+              Computing the fundamental matrix…
+            </p>
+          )}
+          {error && (
+            <p className="py-6 text-center text-xs text-danger">
+              Could not load reliability analysis: {String(error)}
+            </p>
+          )}
+          {data && <ReliabilityContent data={data} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReliabilityContent({ data }: { data: MarkovAnalysis }) {
+  const ref = data.reference_model;
+  const emp = data.empirical_estimate;
+
+  // Forward-path order for the expected-steps table.
+  const stepOrder = [
+    "PLANNED",
+    "PROVISIONING_TARGET_QM",
+    "VALIDATING_PRE",
+    "REWIRING",
+    "DRAIN_WAIT",
+    "VALIDATING_DURING",
+    "DRAINING_SOURCE",
+    "VALIDATING_POST",
+    "ROLLING_BACK",
+  ].filter((s) => s in ref.expected_steps_to_absorption);
+
+  const fromPlanned = ref.absorption_probability["PLANNED"] ?? {};
+
+  return (
+    <div className="space-y-5">
+      {/* Reference model — expected steps */}
+      <div>
+        <h3 className="mb-1 text-xs font-medium uppercase tracking-wider text-fg-subtle">
+          Expected steps to absorption · reference model
+        </h3>
+        <p className="mb-2 text-[11px] text-fg-muted">
+          t = N·1, where N = (I−Q)⁻¹ is the fundamental matrix. Expected
+          number of state transitions before the migration reaches an
+          absorbing state (COMPLETED / ROLLED_BACK / ROLLBACK_FAILED).
+        </p>
+        <div className="overflow-hidden rounded-md border border-border-subtle">
+          {stepOrder.map((s, i) => (
+            <div
+              key={s}
+              className={`flex items-center justify-between px-3 py-1.5 text-xs ${
+                i % 2 === 1 ? "bg-bg-subtle" : ""
+              }`}
+            >
+              <span className="font-mono text-fg-muted">
+                {markovStateLabel(s)}
+              </span>
+              <span className="font-mono text-fg">
+                {ref.expected_steps_to_absorption[s].toFixed(3)}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Reference model — absorption probabilities from PLANNED */}
+      <div>
+        <h3 className="mb-1 text-xs font-medium uppercase tracking-wider text-fg-subtle">
+          Absorption probability from PLANNED · reference model
+        </h3>
+        <p className="mb-2 text-[11px] text-fg-muted">
+          B = N·R. Probability that a migration started at PLANNED is
+          absorbed in each terminal state. Sums to 1.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {Object.entries(fromPlanned).map(([state, prob]) => (
+            <div
+              key={state}
+              className="rounded-md border border-border-subtle bg-bg-subtle px-3 py-2"
+            >
+              <div className="text-[10px] uppercase tracking-wider text-fg-subtle">
+                {markovStateLabel(state)}
+              </div>
+              <div className="mt-0.5 font-mono text-sm text-fg">
+                {(prob * 100).toFixed(2)}%
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Empirical estimate */}
+      <div>
+        <h3 className="mb-1 text-xs font-medium uppercase tracking-wider text-fg-subtle">
+          Empirical estimate · from the real audit log
+        </h3>
+        <p className="mb-2 text-[11px] text-fg-muted">
+          Maximum-likelihood transition frequencies counted from observed
+          migration state transitions in the audit log.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <div className="rounded-md border border-border-subtle bg-bg-subtle px-3 py-2">
+            <div className="text-[10px] uppercase tracking-wider text-fg-subtle">
+              transitions observed
+            </div>
+            <div className="mt-0.5 font-mono text-sm text-fg">
+              {emp.total_transitions}
+            </div>
+          </div>
+          <div className="rounded-md border border-border-subtle bg-bg-subtle px-3 py-2">
+            <div className="text-[10px] uppercase tracking-wider text-fg-subtle">
+              runs absorbed
+            </div>
+            <div className="mt-0.5 font-mono text-sm text-fg">
+              {emp.runs_observed}
+            </div>
+          </div>
+        </div>
+        <p className="mt-2 text-[11px] italic text-fg-subtle">{emp.notes}</p>
+      </div>
+
+      {/* Method reference */}
+      <p className="border-t border-border-subtle pt-3 text-[11px] text-fg-subtle">
+        Method: {data.method_reference}
+      </p>
     </div>
   );
 }
