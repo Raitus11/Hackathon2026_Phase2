@@ -1,0 +1,7 @@
+oc get pods -n roco-dev | findstr qm-appqm
+
+curl.exe -s http://localhost:8000/topologies
+
+oc exec deployment/qm-appqm-ro -n roco-dev -- bash -c "echo 'DISPLAY QREMOTE(RO.ZN.WRQN.TJR1.LCRB.GHI.UOVSFRZ.ZQN01)' | runmqsc APPQM_RO"
+
+curl.exe -s "http://localhost:8000/audit?limit=10"
