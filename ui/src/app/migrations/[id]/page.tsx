@@ -508,6 +508,10 @@ function PlanPanel({ plan }: { plan: MigrationPlanData }) {
             <div className="mt-1 truncate font-mono text-xs text-fg">
               {plan.bridge_channel_name}
             </div>
+            <div className="mt-1.5 text-[11px] italic text-fg-subtle">
+              SDR/RCVR sender-receiver pair: bidirectional message
+              commitment with per-channel FIFO preservation.
+            </div>
           </div>
           <div className="rounded-md border border-border-subtle bg-bg-subtle p-3">
             <div className="text-xs uppercase tracking-wider text-fg-subtle">
