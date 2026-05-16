@@ -2,3 +2,11 @@ Invoke-RestMethod "http://localhost:8000/audit?limit=20" |
   Select-Object -ExpandProperty entries |
   Where-Object { $_.operation -like "*ROLLBACK*" -and $_.success -eq $false } |
   ConvertTo-Json -Depth 6
+
+
+
+
+
+
+=============================
+oc exec deployment/qm-wq31 -n roco-dev -- bash -c "echo 'DISPLAY QUEUE(RO.ZN.*)' | runmqsc WQ31"
