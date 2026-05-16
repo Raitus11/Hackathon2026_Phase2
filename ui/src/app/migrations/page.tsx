@@ -446,7 +446,7 @@ interface ChatTurn {
 const SUGGESTED_QUESTIONS: string[] = [
   "Give me an overall status summary",
   "Show me recent agent activity",
-  "What is the status of ZN",
+  "What is the blast radius of migrating JUUD/C9",
   "What happened with rollbacks for ZN",
 ];
 
@@ -1141,12 +1141,12 @@ function BipartiteGraph({ data }: { data: BlastRadius }) {
   type Edge = { from: [number, number]; to: [number, number]; hot: boolean };
 
   // Layout geometry.
-  const W = 640;
+  const W = 760;
   const rowH = 34;
   const padY = 14;
-  const colApp = 70;
-  const colSrc = 320;
-  const colTgt = 570;
+  const colApp = 8;
+  const colSrc = 314;
+  const colTgt = 620;
   const nodeW = 132;
   const nodeH = 24;
 
