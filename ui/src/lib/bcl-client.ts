@@ -412,6 +412,27 @@ export interface MigrationPlanResponse {
   note?: string;
 }
 
+// ────────── Operator Assistant (Agent #2) ──────────
+
+/**
+ * Response from POST /assistant/query.
+ *
+ * The Operator Assistant answers questions about migrations from real
+ * BCL data. `source` reports how the answer was produced:
+ *   - "stub"          deterministic responder (offline path)
+ *   - "llm"           phrased by the Tachyon LLM over a factual context
+ *   - "llm_fallback"  LLM was tried and failed; deterministic answer used
+ * Either way the facts come from live database reads, and the call is
+ * audit-logged as an AGENT_INVOCATION (see agent_invocation_id).
+ */
+export interface AssistantAnswer {
+  answer: string;
+  source: "stub" | "llm" | "llm_fallback";
+  intent: string;
+  app_id: string | null;
+  agent_invocation_id: number | null;
+}
+
 // ────────── Fetch helpers ──────────
 
 async function bclGet<T>(path: string): Promise<T> {
@@ -604,6 +625,23 @@ export const bcl = {
       bclGet<MigrationPlanResponse>(`/migrations/${id}/plan`),
     drain: (id: number | string) =>
       bclGet<MigrationDrainResponse>(`/migrations/${id}/drain`),
+  },
+
+  /**
+   * Operator Assistant — the BCL's second agent (Battle Plan v3 §6.3.7).
+   *
+   * Answers natural-language questions about migrations from real BCL
+   * data: migration state, the Lamport-ordered audit trail, rollback
+   * steps, drain predictions, and agent activity. Read-only — the
+   * assistant can only query, never mutate. Every call is audit-logged
+   * as an AGENT_INVOCATION.
+   */
+  assistant: {
+    query: (message: string, sessionId = "ui") =>
+      bclPost<{ message: string; session_id: string }, AssistantAnswer>(
+        "/assistant/query",
+        { message, session_id: sessionId },
+      ),
   },
 };
 

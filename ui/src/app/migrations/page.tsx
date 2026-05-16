@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import Link from "next/link";
@@ -12,6 +12,7 @@ import {
   migrationStateLabel,
   TERMINAL_STATES,
   type Application,
+  type AssistantAnswer,
   type Migration,
   type MigrationState,
   type Topology,
@@ -324,6 +325,11 @@ export default function MigrationWorkspace() {
         </div>
       </section>
 
+      {/* Operator Assistant — Agent #2 */}
+      <section className="mb-6">
+        <OperatorAssistantPanel />
+      </section>
+
       {/* Action error banner */}
       {error && (
         <div className="fixed bottom-4 right-4 z-50 max-w-md rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-xs">
@@ -405,6 +411,202 @@ function StatePill({ state }: { state: MigrationState }) {
       />
       {migrationStateLabel(state)}
     </span>
+  );
+}
+
+// ──────────── Operator Assistant panel ────────────
+
+interface ChatTurn {
+  role: "user" | "assistant";
+  text: string;
+  /** Present on assistant turns — how the answer was produced. */
+  meta?: {
+    source: AssistantAnswer["source"];
+    intent: string;
+    agentInvocationId: number | null;
+  };
+}
+
+/** Pre-canned questions the assistant answers well. Seed judge engagement. */
+const SUGGESTED_QUESTIONS: string[] = [
+  "Give me an overall status summary",
+  "Show me recent agent activity",
+  "What is the status of ZN",
+  "What happened with rollbacks for ZN",
+];
+
+/**
+ * Operator Assistant chat panel.
+ *
+ * The BCL's second agent: it answers questions about migrations from
+ * real BCL data via POST /assistant/query. Read-only — it can only
+ * query, never mutate. Every answer is audit-logged as an
+ * AGENT_INVOCATION; the panel surfaces the invocation id + source so
+ * the agent's work is visibly traceable.
+ */
+function OperatorAssistantPanel() {
+  const [turns, setTurns] = useState<ChatTurn[]>([]);
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  // Keep the transcript scrolled to the newest turn.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [turns, busy]);
+
+  async function ask(question: string) {
+    const q = question.trim();
+    if (!q || busy) return;
+    setInput("");
+    setTurns((t) => [...t, { role: "user", text: q }]);
+    setBusy(true);
+    try {
+      const res = await bcl.assistant.query(q);
+      setTurns((t) => [
+        ...t,
+        {
+          role: "assistant",
+          text: res.answer,
+          meta: {
+            source: res.source,
+            intent: res.intent,
+            agentInvocationId: res.agent_invocation_id,
+          },
+        },
+      ]);
+    } catch (err) {
+      setTurns((t) => [
+        ...t,
+        {
+          role: "assistant",
+          text: `The assistant could not answer that: ${String(err)}`,
+          meta: { source: "stub", intent: "ERROR", agentInvocationId: null },
+        },
+      ]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="panel">
+      <div className="border-b border-border-subtle px-4 py-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-sm font-medium">Operator Assistant</h2>
+            <p className="mt-0.5 text-xs text-fg-muted">
+              Agent #2. Ask about migration status, the Lamport-ordered audit
+              trail, rollbacks, drain predictions, or agent activity. Answers
+              come from live BCL data; every query is audit-logged as an
+              AGENT_INVOCATION.
+            </p>
+          </div>
+          <span className="pill text-accent">agent</span>
+        </div>
+      </div>
+
+      {/* Transcript */}
+      <div
+        ref={scrollRef}
+        className="max-h-80 overflow-y-auto px-4 py-3"
+      >
+        {turns.length === 0 ? (
+          <p className="py-6 text-center text-xs text-fg-subtle">
+            Ask the assistant a question, or pick one below.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {turns.map((turn, i) => (
+              <ChatBubble key={i} turn={turn} />
+            ))}
+            {busy && (
+              <div className="text-xs text-fg-subtle">
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+                  assistant is querying the audit log…
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Suggested questions */}
+      <div className="flex flex-wrap gap-1.5 border-t border-border-subtle px-4 py-2">
+        {SUGGESTED_QUESTIONS.map((q) => (
+          <button
+            key={q}
+            type="button"
+            onClick={() => ask(q)}
+            disabled={busy}
+            className="rounded-md border border-border-subtle bg-bg-subtle px-2 py-1 text-[11px] text-fg-muted transition-colors hover:bg-bg-elevated hover:text-fg disabled:opacity-40"
+          >
+            {q}
+          </button>
+        ))}
+      </div>
+
+      {/* Input */}
+      <div className="flex items-center gap-2 border-t border-border-subtle px-4 py-3">
+        <input
+          type="text"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") ask(input);
+          }}
+          placeholder="Ask the Operator Assistant…"
+          disabled={busy}
+          className="block w-full rounded-md border border-border-subtle bg-bg-subtle px-2 py-1.5 text-xs text-fg placeholder:text-fg-subtle disabled:opacity-50"
+        />
+        <button
+          type="button"
+          onClick={() => ask(input)}
+          disabled={busy || !input.trim()}
+          className={`shrink-0 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
+            busy || !input.trim()
+              ? "cursor-not-allowed border-border-subtle bg-bg-subtle text-fg-subtle opacity-40"
+              : "border-accent/40 bg-accent/10 text-accent hover:bg-accent/20"
+          }`}
+        >
+          {busy ? "…" : "Ask"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ChatBubble({ turn }: { turn: ChatTurn }) {
+  if (turn.role === "user") {
+    return (
+      <div className="flex justify-end">
+        <div className="max-w-[80%] rounded-md border border-accent/30 bg-accent/10 px-3 py-2 text-xs text-fg">
+          {turn.text}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="flex justify-start">
+      <div className="max-w-[85%] rounded-md border border-border-subtle bg-bg-subtle px-3 py-2">
+        <p className="text-xs leading-relaxed text-fg">{turn.text}</p>
+        {turn.meta && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] text-fg-subtle">
+            <span className="rounded border border-border-subtle px-1 py-0.5 font-mono uppercase">
+              {turn.meta.source}
+            </span>
+            <span className="font-mono">{turn.meta.intent}</span>
+            {turn.meta.agentInvocationId !== null && (
+              <span className="font-mono">
+                inv #{turn.meta.agentInvocationId}
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
