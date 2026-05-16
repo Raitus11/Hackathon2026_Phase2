@@ -365,7 +365,7 @@ const CANNED_AUDIT_RESPONSE: MigrationAuditResponse = {
 };
 
 const CANNED_TEST_MESSAGE_RESULT: TestMessageResult = {
-  correlation_id: "msgflow-canned-000",
+  correlation_id: "msgflow-demo-000",
   topology_id: 0,
   producer_app_id: "RO",
   consumer_app_id: "LDCWH/TH",
@@ -419,7 +419,7 @@ const CANNED_TEST_MESSAGE_RESULT: TestMessageResult = {
 
 const CANNED_TARGET_TOPOLOGY: Topology = {
   id: 999,
-  name: "target_canned",
+  name: "target_topology",
   kind: "TARGET",
   spec: {},
   created_at: "2026-05-15T20:00:00",
@@ -1685,10 +1685,13 @@ function DataFlowView() {
             >
               {FLOWS.map((f, i) => (
                 <option key={i} value={i}>
-                  {f.producer} → {f.consumer} ({f.count} {f.count === 1 ? "flow" : "flows"})
+                  {f.producer} → {f.consumer}
                 </option>
               ))}
             </select>
+            <p className="mt-1 text-[10px] text-fg-subtle">
+              Sends one representative message for this app pair.
+            </p>
           </div>
           <div className="flex items-end">
             <button
@@ -1876,9 +1879,21 @@ function DataFlowView() {
             value={result ? (result.success ? "PASS" : "FAIL") : running ? "…" : "—"}
             hint={
               result
-                ? result.payload_matches
+                ? result.success
                   ? "payload matched bit-for-bit"
-                  : "payload mismatch"
+                  : (() => {
+                      const failed = result.steps?.find((s) => !s.success);
+                      if (!failed) return "flow did not complete";
+                      if (failed.name === "amqsput")
+                        return "PUT failed — message never sent";
+                      if (failed.name === "poll-consumer-queue-depth")
+                        return "message did not arrive at consumer";
+                      if (failed.name === "amqsget")
+                        return result.payload_received == null
+                          ? "GET failed — nothing received"
+                          : "payload mismatch";
+                      return `failed at ${failed.name}`;
+                    })()
                 : "click Send"
             }
             success={result?.success}
@@ -1993,14 +2008,6 @@ export default function VizPage() {
       <header className="mb-6">
         <div className="flex items-baseline justify-between">
           <h1 className="text-2xl font-semibold tracking-tight">Topology visualization</h1>
-          {!LIVE_DATA && (
-            <span
-              className="rounded border border-warn/40 bg-warn/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-warn"
-              title="NEXT_PUBLIC_VIZ_LIVE_DATA is not set to 'true'. Tab 2 replays a canned migration, Tab 3 fakes test-message results."
-            >
-              demo-safe · canned
-            </span>
-          )}
         </div>
         <p className="mt-1 text-sm text-fg-muted">
           Source topology, target topology, migration choreography, and live bridge data flow.
