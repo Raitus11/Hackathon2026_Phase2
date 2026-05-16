@@ -522,6 +522,68 @@ async function bclPostForm<T>(path: string, form: FormData): Promise<T> {
 
 // ────────── API surface ──────────
 
+// ────────── Blast radius — migration co-tenancy + isolation ──────────
+
+/**
+ * One source QM the migrating app touches, and who else is on it.
+ * Returned inside BlastRadius.shared_qm_exposure.
+ */
+export interface SharedQmExposure {
+  qm: string;
+  is_shared: boolean;
+  migrating_app_queues: string[];
+  cotenant_apps: string[];
+  cotenant_queue_count: number;
+}
+
+/** One co-tenant app sharing a source QM with the migrating app. */
+export interface CoTenant {
+  app_id: string;
+  shared_qm: string;
+  queues_on_shared_qm: string[];
+}
+
+/**
+ * The isolation proof. The migration's REWIRING MQSC is enumerated (never
+ * executed) and every command classified into two DISJOINT buckets:
+ *   - commands_touching_cotenant_exclusive: commands hitting a queue a
+ *     co-tenant owns exclusively of the migrating app — the disturbance
+ *     count; 0 means per-queue isolated.
+ *   - cotenants_with_rerouted_traffic: co-tenant apps that produce into a
+ *     queue being rewired — affected (traffic transparently re-routed via
+ *     QREMOTE) but NOT disturbed; no reconfiguration on their side.
+ */
+export interface IsolationCheck {
+  total_migration_commands: number;
+  commands_touching_migrating_app: number;
+  commands_touching_cotenant_exclusive: number;
+  cotenant_exclusive_queues_in_blast_radius: string[];
+  cotenants_with_rerouted_traffic: string[];
+  disturbed: boolean;
+}
+
+/** GET /topologies/{id}/blast-radius response. */
+export interface BlastRadius {
+  app_id: string;
+  source_qm: string | null;
+  target_qm: string | null;
+  is_mainframe_fronted: boolean;
+  neighbourhoods: string[];
+  shared_qm_exposure: SharedQmExposure[];
+  cotenants: CoTenant[];
+  isolation: IsolationCheck;
+  summary: string;
+  references: string[];
+}
+
+/** GET /topologies/{id}/migration-order response. */
+export interface MigrationOrder {
+  recommended_order: string[];
+  per_app_cotenancy_degree: Record<string, number>;
+  rationale: string;
+  reference: string;
+}
+
 export const bcl = {
   health: () => bclGet<Health>("/health/ready"),
 
@@ -690,6 +752,22 @@ export const bcl = {
    */
   reliability: {
     markov: () => bclGet<MarkovAnalysis>("/reliability/markov"),
+  },
+
+  /**
+   * Migration blast-radius analysis — per-app co-tenancy + isolation
+   * proof. Read-only: enumerates the migration's MQSC, never executes it.
+   */
+  blastRadius: {
+    forApp: (sourceTopologyId: number, appId: string) =>
+      bclGet<BlastRadius>(
+        `/topologies/${sourceTopologyId}/blast-radius` +
+          `?app=${encodeURIComponent(appId)}`,
+      ),
+    migrationOrder: (sourceTopologyId: number) =>
+      bclGet<MigrationOrder>(
+        `/topologies/${sourceTopologyId}/migration-order`,
+      ),
   },
 };
 

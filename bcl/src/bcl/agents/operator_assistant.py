@@ -44,6 +44,8 @@ from bcl.models.orm import (
     AuditLog,
     Migration,
     MigrationState,
+    Topology,
+    TopologyKind,
 )
 
 logger = logging.getLogger("bcl.agents.operator_assistant")
@@ -60,7 +62,7 @@ class _Intent:
 
     kind: str
     """One of: STATUS_ALL, STATUS_ONE, AUDIT_ONE, ROLLBACK_INFO,
-    DRAIN_INFO, AGENT_ACTIVITY, COUNTS, HELP."""
+    DRAIN_INFO, AGENT_ACTIVITY, COUNTS, BLAST_RADIUS, HELP."""
 
     app_id: str | None = None
     """Resolved app id when the question names one."""
@@ -71,6 +73,21 @@ _KEYWORDS_DRAIN = ("drain", "queue depth", "little", "backlog")
 _KEYWORDS_AGENT = ("agent", "planner", "llm", "invocation", "ai activity")
 _KEYWORDS_AUDIT = ("audit", "lamport", "history", "what happened", "timeline")
 _KEYWORDS_COUNT = ("how many", "count", "total", "summary", "overall")
+_KEYWORDS_BLAST = (
+    "blast radius",
+    "blast-radius",
+    "co-tenant",
+    "cotenant",
+    "co-tenancy",
+    "shared qm",
+    "shared queue manager",
+    "disturb",
+    "isolation",
+    "isolated",
+    "other apps",
+    "without affecting",
+    "without touching",
+)
 
 
 def classify_intent(question: str, known_app_ids: list[str]) -> _Intent:
@@ -92,6 +109,8 @@ def classify_intent(question: str, known_app_ids: list[str]) -> _Intent:
 
     if any(k in q for k in _KEYWORDS_COUNT) and resolved is None:
         return _Intent("COUNTS")
+    if any(k in q for k in _KEYWORDS_BLAST):
+        return _Intent("BLAST_RADIUS", resolved)
     if any(k in q for k in _KEYWORDS_AGENT):
         return _Intent("AGENT_ACTIVITY", resolved)
     if any(k in q for k in _KEYWORDS_ROLLBACK):
@@ -208,6 +227,76 @@ async def _build_context(
         ctx["invocation_count"] = len(invs)
         return ctx
 
+    if intent.kind == "BLAST_RADIUS":
+        # Blast radius needs the SOURCE + TARGET topology specs. Pick the
+        # most recent of each — the demo has one of each on record.
+        from bcl.analysis.blast_radius import analyse_blast_radius
+
+        src_rows = await session.execute(
+            select(Topology)
+            .where(Topology.kind == TopologyKind.SOURCE)
+            .order_by(desc(Topology.created_at))
+        )
+        source = src_rows.scalars().first()
+        tgt_rows = await session.execute(
+            select(Topology)
+            .where(Topology.kind == TopologyKind.TARGET)
+            .order_by(desc(Topology.created_at))
+        )
+        target = tgt_rows.scalars().first()
+
+        if source is None or target is None:
+            ctx["error"] = (
+                "blast-radius analysis needs both a SOURCE and a TARGET "
+                "topology on record"
+            )
+            return ctx
+        if intent.app_id is None:
+            ctx["error"] = (
+                "name an app to analyse, e.g. 'blast radius of migrating "
+                "LIY/KW'"
+            )
+            return ctx
+
+        from bcl.config import get_settings as _gs
+
+        br = analyse_blast_radius(
+            app_id=intent.app_id,
+            source_topology_spec=source.spec,
+            target_topology_spec=target.spec,
+            target_qm_namespace=_gs().namespace,
+        )
+        if br.source_qm is None:
+            ctx["error"] = (
+                f"app {intent.app_id} was not found in the source topology"
+            )
+            return ctx
+        ctx["blast_radius"] = {
+            "app_id": br.app_id,
+            "source_qm": br.source_qm,
+            "target_qm": br.target_qm,
+            "is_mainframe_fronted": br.is_mainframe_fronted,
+            "neighbourhoods": br.neighbourhoods,
+            "cotenant_apps": sorted(
+                {c.app_id for c in br.cotenants}
+            ),
+            "shared_qms": [
+                e.qm for e in br.shared_qm_exposure if e.is_shared
+            ],
+            "total_migration_commands": (
+                br.isolation.total_migration_commands
+            ),
+            "commands_touching_cotenant_exclusive": (
+                br.isolation.commands_touching_cotenant_exclusive
+            ),
+            "cotenants_with_rerouted_traffic": (
+                br.isolation.cotenants_with_rerouted_traffic
+            ),
+            "disturbed": br.isolation.disturbed,
+            "summary": br.summary,
+        }
+        return ctx
+
     # All remaining intents are app-scoped.
     if intent.app_id is None:
         ctx["error"] = "no app named in the question"
@@ -296,6 +385,56 @@ def deterministic_answer(question: str, ctx: dict[str, Any]) -> str:
             f"({recent['trigger']}), model {recent['model']}, "
             f"{recent['duration_ms']} ms. Every agent call is written to "
             "the audit log as an AGENT_INVOCATION event."
+        )
+
+    if kind == "BLAST_RADIUS":
+        br = ctx["blast_radius"]
+        cotenants = br["cotenant_apps"]
+        mf = (
+            "Its source queue manager is mainframe-fronted — the migration "
+            "does not move or restart that queue manager; it stays on "
+            "z/OS. Only the app's queue ownership is rewired. "
+            if br["is_mainframe_fronted"]
+            else ""
+        )
+        if not cotenants:
+            return (
+                f"Migrating {br['app_id']} from {br['source_qm']} to "
+                f"{br['target_qm']}: {mf}{br['source_qm']} hosts no other "
+                f"app, so there are no co-tenants to disturb. The rewiring "
+                f"issues {br['total_migration_commands']} MQSC command(s), "
+                f"all owned by {br['app_id']}."
+            )
+        n_exc = br["commands_touching_cotenant_exclusive"]
+        verdict = (
+            f"of the {br['total_migration_commands']} MQSC commands the "
+            f"migration issues, {n_exc} touch a queue another app owns "
+            f"exclusively"
+        )
+        if not br["disturbed"]:
+            verdict += (
+                " — zero. No co-tenant's exclusively-owned queue is "
+                "mutated; every command targets a queue owned by "
+                f"{br['app_id']} or a bridge object for this migration."
+            )
+        else:
+            verdict += (
+                ". WARNING — a co-tenant's exclusive queue would be "
+                "mutated; investigate before running this migration."
+            )
+        rerouted = br.get("cotenants_with_rerouted_traffic") or []
+        if rerouted:
+            verdict += (
+                f" {', '.join(rerouted)} produce into queue(s) being "
+                "rewired — their traffic is transparently re-routed via "
+                "QREMOTE, affected but not disturbed, with no "
+                "reconfiguration on their side."
+            )
+        return (
+            f"Migrating {br['app_id']} from {br['source_qm']} to dedicated "
+            f"QM {br['target_qm']}: {mf}{br['source_qm']} is shared with "
+            f"{len(cotenants)} other app(s) — {', '.join(cotenants)}. "
+            f"Blast radius: {verdict}"
         )
 
     mig = ctx["migration"]

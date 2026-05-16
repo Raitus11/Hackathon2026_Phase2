@@ -13,6 +13,7 @@ from bcl import __version__
 from bcl.api import (
     assistant,
     audit,
+    blast_radius_api,
     health,
     message_flow,
     migration,
@@ -81,6 +82,7 @@ def create_app() -> FastAPI:
     app.include_router(audit.router)
     app.include_router(assistant.router)
     app.include_router(reliability_api.router)
+    app.include_router(blast_radius_api.router)
 
     @app.get("/", include_in_schema=False)
     async def root() -> dict[str, str]:
