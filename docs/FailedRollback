@@ -17,3 +17,10 @@ Invoke-RestMethod "http://localhost:8080/audit?limit=30" |
   Where-Object { $_.operation -like "*PLAN*" } |
   Select-Object -Last 1 |
   ConvertTo-Json -Depth 6
+
+===============
+
+Invoke-RestMethod "http://localhost:8080/audit?limit=40" |
+  Select-Object -ExpandProperty entries |
+  Where-Object { $_.success -eq $false } |
+  ConvertTo-Json -Depth 6
