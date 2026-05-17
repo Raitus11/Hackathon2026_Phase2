@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IntelliAI 2.0 — IBM MQ Migration Control Plane</title>
+<style>
+  :root {
+    --bg: #0e0f11;
+    --surface: #16181b;
+    --surface-2: #1d2025;
+    --border: #2a2e34;
+    --text: #e6e7e9;
+    --muted: #9ca0a8;
+    --faint: #6b6f77;
+    --accent: #5dcaa5;
+    --accent-dim: #1d9e75;
+    --blue: #85b7eb;
+    --amber: #ef9f27;
+    --coral: #f0997b;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.65;
+    font-size: 16px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 0 24px; }
+
+  header {
+    border-bottom: 1px solid var(--border);
+    padding: 56px 0 40px;
+    background: var(--surface);
+  }
+  header .wrap { display: block; }
+  .eyebrow {
+    color: var(--accent);
+    font-size: 13px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 500;
+    margin-bottom: 12px;
+  }
+  h1 { font-size: 34px; font-weight: 600; letter-spacing: -0.02em; margin-bottom: 10px; }
+  .sub { color: var(--muted); font-size: 18px; max-width: 640px; }
+  .meta {
+    margin-top: 24px; display: flex; flex-wrap: wrap; gap: 10px;
+  }
+  .pill {
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 999px; padding: 5px 13px; font-size: 13px; color: var(--muted);
+  }
+  .pill b { color: var(--text); font-weight: 500; }
+
+  nav {
+    position: sticky; top: 0; z-index: 10;
+    background: rgba(14,15,17,0.92);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border);
+  }
+  nav .wrap {
+    display: flex; flex-wrap: wrap; gap: 4px; padding-top: 10px; padding-bottom: 10px;
+  }
+  nav a {
+    color: var(--muted); text-decoration: none; font-size: 13px;
+    padding: 5px 11px; border-radius: 6px; transition: background 0.15s, color 0.15s;
+  }
+  nav a:hover { background: var(--surface-2); color: var(--text); }
+
+  section { padding: 48px 0; border-bottom: 1px solid var(--border); }
+  section:last-of-type { border-bottom: none; }
+  h2 {
+    font-size: 24px; font-weight: 600; letter-spacing: -0.01em;
+    margin-bottom: 8px; scroll-margin-top: 64px;
+  }
+  h2 .num { color: var(--accent); font-weight: 500; margin-right: 10px; }
+  .lead { color: var(--muted); font-size: 17px; margin-bottom: 24px; }
+  h3 {
+    font-size: 16px; font-weight: 600; margin: 28px 0 8px;
+    color: var(--text);
+  }
+  p { margin-bottom: 14px; color: var(--text); }
+  p.note { color: var(--muted); font-size: 15px; }
+  code {
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 4px; padding: 1px 6px; font-size: 13.5px;
+    font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    color: var(--accent);
+  }
+  ul { margin: 0 0 14px 0; padding-left: 0; list-style: none; }
+  li {
+    position: relative; padding-left: 22px; margin-bottom: 9px; color: var(--text);
+  }
+  li::before {
+    content: ""; position: absolute; left: 4px; top: 10px;
+    width: 5px; height: 5px; border-radius: 50%; background: var(--accent-dim);
+  }
+  li b { font-weight: 600; }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 18px 0; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 18px 20px;
+  }
+  .card h4 {
+    font-size: 15px; font-weight: 600; margin-bottom: 6px;
+    display: flex; align-items: baseline; gap: 8px;
+  }
+  .card h4 .tag {
+    font-size: 11px; color: var(--accent); border: 1px solid var(--accent-dim);
+    border-radius: 4px; padding: 1px 6px; font-weight: 500; letter-spacing: 0.03em;
+  }
+  .card p { font-size: 14.5px; color: var(--muted); margin-bottom: 0; }
+
+  figure {
+    margin: 26px 0; background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 22px;
+  }
+  figure svg { display: block; width: 100%; height: auto; }
+  figcaption {
+    margin-top: 14px; color: var(--muted); font-size: 14px;
+    border-top: 1px solid var(--border); padding-top: 12px;
+  }
+  figcaption b { color: var(--text); font-weight: 600; }
+
+  .callout {
+    background: var(--surface-2); border-left: 3px solid var(--accent-dim);
+    border-radius: 0 6px 6px 0; padding: 14px 18px; margin: 20px 0;
+  }
+  .callout p { margin-bottom: 0; font-size: 15px; color: var(--muted); }
+  .callout b { color: var(--text); }
+
+  .formula {
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 6px; padding: 14px 18px; margin: 14px 0;
+    font-family: "SF Mono", ui-monospace, Menlo, monospace;
+    font-size: 15px; color: var(--blue);
+  }
+  .formula .where { display: block; margin-top: 6px; color: var(--faint); font-size: 13px; }
+
+  table { width: 100%; border-collapse: collapse; margin: 18px 0; font-size: 14.5px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; }
+  td { color: var(--text); vertical-align: top; }
+  td:first-child { white-space: nowrap; }
+  td code { font-size: 12.5px; }
+
+  footer {
+    padding: 36px 0 56px; color: var(--faint); font-size: 13px;
+  }
+  footer .wrap { display: block; }
+
+  /* SVG diagram theming — diagrams use a fixed palette readable on dark */
+  .dgm text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  .dgm .t  { font-size: 14px; fill: #e6e7e9; }
+  .dgm .ts { font-size: 12px; fill: #9ca0a8; }
+  .dgm .th { font-size: 14px; font-weight: 600; fill: #e6e7e9; }
+  .dgm .box { fill: #1d2025; stroke: #2a2e34; }
+  .dgm .arr { stroke: #6b6f77; stroke-width: 1.5; fill: none; }
+  .dgm .leader { stroke: #6b6f77; stroke-width: 0.5; stroke-dasharray: 3 3; }
+  .dgm .fill-blue   { fill: #15314a; stroke: #378add; }
+  .dgm .fill-teal   { fill: #123a30; stroke: #1d9e75; }
+  .dgm .fill-purple { fill: #241f3f; stroke: #7f77dd; }
+  .dgm .fill-amber  { fill: #3a2a0c; stroke: #ba7517; }
+  .dgm .fill-green  { fill: #1c2e0c; stroke: #639922; }
+  .dgm .fill-coral  { fill: #3a2114; stroke: #d85a30; }
+  .dgm .fill-gray   { fill: #1d2025; stroke: #5f5e5a; }
+  .dgm .fill-red    { fill: #3a1414; stroke: #a32d2d; }
+
+  @media (max-width: 680px) {
+    .grid { grid-template-columns: 1fr; }
+    h1 { font-size: 27px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="eyebrow">IBM MQ Hackathon 2026 · Phase 2</div>
+    <h1>IntelliAI 2.0</h1>
+    <p class="sub">An IBM MQ migration control plane — moving production applications onto dedicated queue managers with no message loss, no application reconfiguration, and a complete audit trail.</p>
+    <div class="meta">
+      <span class="pill"><b>16</b> IBM MQ 9.4.5 queue managers</span>
+      <span class="pill"><b>7</b> apps migrated</span>
+      <span class="pill"><b>OpenShift</b> namespace roco-dev</span>
+      <span class="pill">FastAPI · Next.js · SQLite</span>
+    </div>
+  </div>
+</header>
+
+<nav>
+  <div class="wrap">
+    <a href="#problem">The problem</a>
+    <a href="#approach">Our approach</a>
+    <a href="#capabilities">Key capabilities</a>
+    <a href="#architecture">Architecture</a>
+    <a href="#mechanism">Migration mechanism</a>
+    <a href="#isolation">Per-app isolation</a>
+    <a href="#statemachine">State machine</a>
+    <a href="#math">The math</a>
+    <a href="#components">Components</a>
+    <a href="#ui">The UI</a>
+    <a href="#limits">Honest limits</a>
+  </div>
+</nav>
+
+<section id="problem">
+  <div class="wrap">
+    <h2><span class="num">01</span>The problem</h2>
+    <p class="lead">Enterprise IBM MQ estates consolidate many applications onto a few shared queue managers. That is operationally fragile.</p>
+    <p>When several applications share one queue manager, they share a failure domain, a maintenance window, a security boundary, and a capacity ceiling. One application's incident becomes everyone's incident. The remedy is to give each application its own dedicated queue manager — but performing that migration on a live estate is the hard part.</p>
+    <p>A safe migration has to satisfy several constraints at once:</p>
+    <ul>
+      <li><b>No message loss.</b> Every in-flight message must be delivered — none stranded on the old queue, none duplicated.</li>
+      <li><b>No application change.</b> The producers and consumers cannot be asked to reconfigure connection strings or restart. They must not even notice.</li>
+      <li><b>No collateral impact.</b> Migrating one application off a shared queue manager must not disturb the other applications still on it.</li>
+      <li><b>Full auditability.</b> Every change must be recorded — what ran, when, in what order, and whether it succeeded — so the migration can be reviewed and, if needed, reversed.</li>
+    </ul>
+    <p>IntelliAI 2.0 is the control plane that performs this migration while holding all four constraints.</p>
+  </div>
+</section>
+
+<section id="approach">
+  <div class="wrap">
+    <h2><span class="num">02</span>Our approach</h2>
+    <p class="lead">One layer governs every queue manager operation. Nothing touches MQ except through it.</p>
+    <p>The system is built around a <b>Business Control Layer (BCL)</b> — a single service that is the only component permitted to issue MQSC or talk to the OpenShift cluster. The user interface talks only to the BCL; the BCL talks to MQ. This gives every operation one chokepoint where it can be validated, sequenced, and recorded.</p>
+    <p>The migration itself is modelled as an explicit <b>state machine</b>, run per application. Each application moves through a fixed sequence of states; every transition emits MQSC and writes an audit record carrying a Lamport clock, so the causal order of events is never ambiguous. If any step fails, the engine rolls that application back — and only that application.</p>
+    <div class="callout">
+      <p><b>Design stance.</b> Deterministic engines perform every state-changing action — provisioning, rewiring, draining, rollback. Three LLM-backed agents assist the operator with planning, questions, and failure diagnosis. The audit log is the system of record.</p>
+    </div>
+  </div>
+</section>
+
+<section id="capabilities">
+  <div class="wrap">
+    <h2><span class="num">03</span>Key capabilities</h2>
+    <p class="lead">What an operator can do with the system — and what each capability proves.</p>
+    <div class="grid">
+      <div class="card">
+        <h4>Test message flow <span class="tag">proves the path</span></h4>
+        <p>End-to-end message test on any flow: an <code>amqsput</code> places a message, the engine polls the consumer queue depth, and an <code>amqsget</code> retrieves it. It proves a real message travels producer to consumer across the migrated path — not just that the objects exist.</p>
+      </div>
+      <div class="card">
+        <h4>Transparent rewiring <span class="tag">no app change</span></h4>
+        <p>The cutover replaces an app's local queue with a remote-queue alias over an XMITQ bridge. Producers and consumers keep the same connection and queue name — they never reconnect. The migration is invisible to the application.</p>
+      </div>
+      <div class="card">
+        <h4>Blast-radius analysis <span class="tag">co-tenants safe</span></h4>
+        <p>Before a migration runs, the system enumerates every MQSC command it will issue and counts those touching a co-tenant's queues. That count is zero — and the migration is gated on it. Isolation is proven, not assumed.</p>
+      </div>
+      <div class="card">
+        <h4>Per-app rollback <span class="tag">clean recovery</span></h4>
+        <p>If any step fails, the engine reverses that application's completed steps in reverse Lamport order and restores its source queues. Scoped to one app — rolling back app A never touches app B or C.</p>
+      </div>
+      <div class="card">
+        <h4>RCA assistant <span class="tag">root cause in seconds</span></h4>
+        <p>For a failed migration, the RCA assistant reads its Lamport-ordered audit trail, locates the failure event, names the MQ reason code, and produces a structured diagnosis with suggested checks — and answers free-text questions about any migration.</p>
+      </div>
+      <div class="card">
+        <h4>Lamport-clocked audit log <span class="tag">everything traceable</span></h4>
+        <p>Every state change writes one record carrying a Lamport clock, giving an unambiguous causal order of events. The audit log — not the UI, not the LLM — is the system of record.</p>
+      </div>
+      <div class="card">
+        <h4>Evidence export <span class="tag">audit-ready</span></h4>
+        <p>On demand: the exact MQSC script a migration executed, the audit log as CSV, and a per-migration evidence bundle. The work is reviewable after the fact without touching the system.</p>
+      </div>
+      <div class="card">
+        <h4>Reliability model <span class="tag">measured, not claimed</span></h4>
+        <p>An absorbing Markov chain over the state machine gives expected steps to completion and the probability of each outcome — presented alongside an empirical estimate counted from real runs, never merged with it.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="architecture">
+  <div class="wrap">
+    <h2><span class="num">04</span>System architecture</h2>
+    <p class="lead">Three tiers. The UI talks only to the BCL; the BCL is the only thing that talks to MQ.</p>
+    <figure>
+      <svg class="dgm" viewBox="0 0 680 620" role="img" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="ar1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#6b6f77" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+        </defs>
+        <rect class="fill-gray" x="40" y="40" width="600" height="62" rx="12" stroke-width="0.5"/>
+        <text class="th" x="340" y="64" text-anchor="middle" dominant-baseline="central">UI — Next.js control plane</text>
+        <text class="ts" x="340" y="84" text-anchor="middle" dominant-baseline="central">Dashboard · Migrations · Topology Viz · RCA</text>
+        <text class="ts" x="354" y="120" text-anchor="middle">REST + SSE</text>
+        <line x1="340" y1="102" x2="340" y2="138" class="arr" marker-end="url(#ar1)"/>
+        <rect class="fill-blue" x="40" y="140" width="600" height="300" rx="14" stroke-width="0.5"/>
+        <text class="th" x="60" y="162" dominant-baseline="central">Business Control Layer — FastAPI</text>
+        <text class="ts" x="60" y="180" dominant-baseline="central">The only component that talks to MQ. Every write is audit-logged.</text>
+        <rect class="fill-teal" x="58" y="196" width="270" height="92" rx="10" stroke-width="0.5"/>
+        <text class="th" x="193" y="216" text-anchor="middle" dominant-baseline="central">Deterministic engines</text>
+        <text class="ts" x="193" y="236" text-anchor="middle" dominant-baseline="central">Provisioning · Migration state machine</text>
+        <text class="ts" x="193" y="252" text-anchor="middle" dominant-baseline="central">Rewiring · Drain · Rollback</text>
+        <text class="ts" x="193" y="268" text-anchor="middle" dominant-baseline="central">Policy guardrails · MQSC derivation</text>
+        <rect class="fill-purple" x="352" y="196" width="270" height="92" rx="10" stroke-width="0.5"/>
+        <text class="th" x="487" y="216" text-anchor="middle" dominant-baseline="central">Agents — Tachyon LLM (Gemini 2.5 Pro)</text>
+        <text class="ts" x="487" y="236" text-anchor="middle" dominant-baseline="central">Migration Planner · Operator Assistant</text>
+        <text class="ts" x="487" y="252" text-anchor="middle" dominant-baseline="central">RCA Assistant</text>
+        <text class="ts" x="487" y="268" text-anchor="middle" dominant-baseline="central">Plan · assist · diagnose</text>
+        <rect class="fill-teal" x="58" y="300" width="270" height="56" rx="10" stroke-width="0.5"/>
+        <text class="th" x="193" y="320" text-anchor="middle" dominant-baseline="central">Analysis modules</text>
+        <text class="ts" x="193" y="338" text-anchor="middle" dominant-baseline="central">Blast-radius · Markov reliability</text>
+        <rect class="fill-amber" x="352" y="300" width="270" height="56" rx="10" stroke-width="0.5"/>
+        <text class="th" x="487" y="320" text-anchor="middle" dominant-baseline="central">SQLite · Lamport-clocked audit log</text>
+        <text class="ts" x="487" y="338" text-anchor="middle" dominant-baseline="central">System of record — every state change</text>
+        <rect class="fill-blue" x="58" y="368" width="564" height="52" rx="10" stroke-width="0.5"/>
+        <text class="th" x="340" y="386" text-anchor="middle" dominant-baseline="central">REST API</text>
+        <text class="ts" x="340" y="404" text-anchor="middle" dominant-baseline="central">/topologies · /migrations · /rca · /exports · /healthz · /audit</text>
+        <text class="ts" x="372" y="458" text-anchor="middle">oc exec · runmqsc</text>
+        <line x1="340" y1="440" x2="340" y2="476" class="arr" marker-end="url(#ar1)"/>
+        <rect class="fill-green" x="40" y="478" width="600" height="102" rx="14" stroke-width="0.5"/>
+        <text class="th" x="60" y="500" dominant-baseline="central">OpenShift namespace — roco-dev</text>
+        <text class="ts" x="60" y="518" dominant-baseline="central">Real IBM MQ 9.4.5 — provisioned and realized by the BCL</text>
+        <rect class="box" x="58" y="532" width="270" height="36" rx="8" stroke-width="0.5"/>
+        <text class="t" x="193" y="550" text-anchor="middle" dominant-baseline="central">9 source queue managers</text>
+        <rect class="box" x="352" y="532" width="270" height="36" rx="8" stroke-width="0.5"/>
+        <text class="t" x="487" y="550" text-anchor="middle" dominant-baseline="central">7 target queue managers</text>
+      </svg>
+      <figcaption><b>Three tiers.</b> The Next.js UI issues REST calls and consumes server-sent events. The FastAPI BCL holds the deterministic engines, the three agents, the analysis modules, and the audit log. Every queue manager operation reaches OpenShift through <code>oc exec</code> running MQSC inside the QM pods — there is no other path to MQ.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="mechanism">
+  <div class="wrap">
+    <h2><span class="num">05</span>The migration mechanism</h2>
+    <p class="lead">How one application's queue moves to a new queue manager without the application noticing.</p>
+    <p>The migration relies on IBM MQ's own remote-queue routing. The application keeps connecting to the same queue manager and putting messages to the same queue name. What changes is what that name resolves to.</p>
+    <h3>Step one — provision the target</h3>
+    <p>Before any cutover, the BCL deploys the application's dedicated target queue manager as an OpenShift pod and <b>realizes</b> its MQ objects: the dead-letter queue, the application's local queues, and the channel definitions. This is the same provisioning engine used to stand up the source estate, so the target is a known-good queue manager before traffic touches it.</p>
+    <h3>Step two — build the bridge</h3>
+    <p>A transmission path is built between the source and target queue managers:</p>
+    <ul>
+      <li>A <code>QLOCAL</code> with <code>USAGE(XMITQ)</code> on the source — the bridge transmission queue.</li>
+      <li>A <code>CHANNEL</code> of <code>CHLTYPE(RCVR)</code> on the target — the receiving end.</li>
+      <li>A <code>CHANNEL</code> of <code>CHLTYPE(SDR)</code> on the source, with <code>XMITQ</code> naming the bridge queue and <code>CONNAME</code> pointing at the target's cluster service on port 1414. The sender and receiver share a channel name, as MQSC requires.</li>
+    </ul>
+    <h3>Step three — rewire the queue</h3>
+    <p>For each of the application's queues, the engine runs <code>DELETE QLOCAL</code> followed by <code>DEFINE QREMOTE</code>. The remote-queue alias carries <code>RNAME</code> (the queue's name on the target), <code>RQMNAME</code> (the target queue manager), and <code>XMITQ</code> (the bridge queue). From this moment, a message put to the original name is routed by MQ across the bridge to the target.</p>
+    <figure>
+      <svg class="dgm" viewBox="0 0 680 700" role="img" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="ar2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#6b6f77" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+        </defs>
+        <rect class="fill-gray" x="40" y="40" width="160" height="56" rx="8" stroke-width="0.5"/>
+        <text class="th" x="120" y="58" text-anchor="middle" dominant-baseline="central">Producer app</text>
+        <text class="ts" x="120" y="78" text-anchor="middle" dominant-baseline="central">Connection unchanged</text>
+        <text class="ts" x="248" y="56" text-anchor="middle">PUT to same</text>
+        <text class="ts" x="248" y="72" text-anchor="middle">queue name</text>
+        <line x1="200" y1="68" x2="312" y2="68" class="arr" marker-end="url(#ar2)"/>
+        <rect class="fill-blue" x="314" y="40" width="326" height="250" rx="14" stroke-width="0.5"/>
+        <text class="th" x="334" y="62" dominant-baseline="central">Source queue manager — shared</text>
+        <text class="ts" x="334" y="80" dominant-baseline="central">One of 9. Hosts several apps' queues.</text>
+        <rect class="fill-coral" x="334" y="96" width="286" height="76" rx="10" stroke-width="0.5"/>
+        <text class="th" x="477" y="116" text-anchor="middle" dominant-baseline="central">Before — QLOCAL (this app's queue)</text>
+        <text class="ts" x="477" y="138" text-anchor="middle" dominant-baseline="central">App's messages land in a local queue</text>
+        <text class="ts" x="477" y="154" text-anchor="middle" dominant-baseline="central">on the source QM</text>
+        <rect class="fill-teal" x="334" y="184" width="286" height="92" rx="10" stroke-width="0.5"/>
+        <text class="th" x="477" y="204" text-anchor="middle" dominant-baseline="central">After — QREMOTE alias</text>
+        <text class="ts" x="477" y="226" text-anchor="middle" dominant-baseline="central">DELETE QLOCAL, then DEFINE QREMOTE</text>
+        <text class="ts" x="477" y="242" text-anchor="middle" dominant-baseline="central">RNAME + RQMNAME point to the target;</text>
+        <text class="ts" x="477" y="258" text-anchor="middle" dominant-baseline="central">XMITQ names the bridge transmission queue</text>
+        <rect class="fill-amber" x="180" y="330" width="320" height="120" rx="12" stroke-width="0.5"/>
+        <text class="th" x="340" y="352" text-anchor="middle" dominant-baseline="central">XMITQ bridge — source to target</text>
+        <rect class="box" x="198" y="368" width="284" height="32" rx="6" stroke-width="0.5"/>
+        <text class="ts" x="340" y="384" text-anchor="middle" dominant-baseline="central">QLOCAL USAGE(XMITQ) — bridge transmission queue</text>
+        <rect class="box" x="198" y="406" width="284" height="32" rx="6" stroke-width="0.5"/>
+        <text class="ts" x="340" y="422" text-anchor="middle" dominant-baseline="central">CHANNEL CHLTYPE(SDR) + CHLTYPE(RCVR) pair</text>
+        <path d="M477 276 L477 310 L340 310 L340 328" fill="none" class="arr" marker-end="url(#ar2)"/>
+        <text class="ts" x="540" y="306" text-anchor="middle">routes via</text>
+        <rect class="fill-green" x="40" y="470" width="600" height="190" rx="14" stroke-width="0.5"/>
+        <text class="th" x="60" y="492" dominant-baseline="central">Target queue manager — dedicated to this app</text>
+        <text class="ts" x="60" y="510" dominant-baseline="central">One of 7. Provisioned and realized by the BCL before cutover.</text>
+        <rect class="fill-teal" x="58" y="524" width="280" height="80" rx="10" stroke-width="0.5"/>
+        <text class="th" x="198" y="544" text-anchor="middle" dominant-baseline="central">RCVR channel</text>
+        <text class="ts" x="198" y="566" text-anchor="middle" dominant-baseline="central">CHLTYPE(RCVR) — the SDR's peer.</text>
+        <text class="ts" x="198" y="582" text-anchor="middle" dominant-baseline="central">SDR CONNAME points at this QM's</text>
+        <text class="ts" x="198" y="598" text-anchor="middle" dominant-baseline="central">cluster service on port 1414</text>
+        <rect class="fill-teal" x="354" y="524" width="268" height="80" rx="10" stroke-width="0.5"/>
+        <text class="th" x="488" y="544" text-anchor="middle" dominant-baseline="central">QLOCAL — real destination</text>
+        <text class="ts" x="488" y="566" text-anchor="middle" dominant-baseline="central">The app's queue truly lives here now.</text>
+        <text class="ts" x="488" y="582" text-anchor="middle" dominant-baseline="central">Same queue name as before —</text>
+        <text class="ts" x="488" y="598" text-anchor="middle" dominant-baseline="central">RNAME on the QREMOTE matches it</text>
+        <path d="M340 450 L340 462 L198 462 L198 522" fill="none" class="arr" marker-end="url(#ar2)"/>
+        <line x1="338" y1="564" x2="352" y2="564" class="arr" marker-end="url(#ar2)"/>
+        <text class="ts" x="345" y="636" text-anchor="middle">Messages arrive at the target with the same name the producer always used — the cutover is invisible to the app.</text>
+      </svg>
+      <figcaption><b>The rewiring.</b> The producer never reconnects. MQ's remote-queue routing carries each message from the source <code>QREMOTE</code> alias, across the XMITQ bridge, to the real <code>QLOCAL</code> on the target. The queue keeps the same name throughout.</figcaption>
+    </figure>
+    <h3>Step four — drain and validate</h3>
+    <p>Any messages already sitting on the old local queue at cutover are consumed by the existing consumers. The engine polls the queue depth until it reaches zero — proving no message was left behind — then validates that traffic flows correctly through the new path before marking the application complete.</p>
+  </div>
+</section>
+
+<section id="isolation">
+  <div class="wrap">
+    <h2><span class="num">06</span>Per-app isolation — why other apps are safe</h2>
+    <p class="lead">Source queue managers are shared. Migrating one application provably does not disturb the others.</p>
+    <p>This is the constraint that makes migration genuinely hard, and the one a reviewer will press on. The answer is that the migration is scoped <b>per queue</b>. The rewiring touches only the migrating application's own queues — the co-tenant applications' local queues are never named in any MQSC command the migration runs.</p>
+    <p>That is not just an assertion. The <b>blast-radius analysis</b> enumerates every MQSC command the migration will issue, before it runs, and counts how many of them touch a co-tenant queue. By construction of the choreography that count is zero, and the analysis confirms it. The migration is gated on that confirmation.</p>
+    <figure>
+      <svg class="dgm" viewBox="0 0 680 540" role="img" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="ar3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#6b6f77" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+        </defs>
+        <rect class="fill-blue" x="40" y="40" width="600" height="210" rx="14" stroke-width="0.5"/>
+        <text class="th" x="60" y="62" dominant-baseline="central">Shared source queue manager</text>
+        <text class="ts" x="60" y="80" dominant-baseline="central">Three apps' queues co-reside on the same QM.</text>
+        <rect class="fill-teal" x="58" y="98" width="180" height="134" rx="10" stroke-width="0.5"/>
+        <text class="th" x="148" y="118" text-anchor="middle" dominant-baseline="central">App A — migrating</text>
+        <text class="ts" x="148" y="140" text-anchor="middle" dominant-baseline="central">Only A's queues are</text>
+        <text class="ts" x="148" y="156" text-anchor="middle" dominant-baseline="central">rewired this migration</text>
+        <rect class="box" x="74" y="172" width="148" height="22" rx="4" stroke-width="0.5"/>
+        <text class="ts" x="148" y="183" text-anchor="middle" dominant-baseline="central">QLOCAL to QREMOTE</text>
+        <rect class="box" x="74" y="200" width="148" height="22" rx="4" stroke-width="0.5"/>
+        <text class="ts" x="148" y="211" text-anchor="middle" dominant-baseline="central">QLOCAL to QREMOTE</text>
+        <rect class="fill-gray" x="250" y="98" width="180" height="134" rx="10" stroke-width="0.5"/>
+        <text class="th" x="340" y="118" text-anchor="middle" dominant-baseline="central">App B — co-tenant</text>
+        <text class="ts" x="340" y="140" text-anchor="middle" dominant-baseline="central">Untouched</text>
+        <rect class="box" x="266" y="172" width="148" height="22" rx="4" stroke-width="0.5"/>
+        <text class="ts" x="340" y="183" text-anchor="middle" dominant-baseline="central">QLOCAL — unchanged</text>
+        <rect class="box" x="266" y="200" width="148" height="22" rx="4" stroke-width="0.5"/>
+        <text class="ts" x="340" y="211" text-anchor="middle" dominant-baseline="central">QLOCAL — unchanged</text>
+        <rect class="fill-gray" x="442" y="98" width="180" height="134" rx="10" stroke-width="0.5"/>
+        <text class="th" x="532" y="118" text-anchor="middle" dominant-baseline="central">App C — co-tenant</text>
+        <text class="ts" x="532" y="140" text-anchor="middle" dominant-baseline="central">Untouched</text>
+        <rect class="box" x="458" y="172" width="148" height="22" rx="4" stroke-width="0.5"/>
+        <text class="ts" x="532" y="183" text-anchor="middle" dominant-baseline="central">QLOCAL — unchanged</text>
+        <rect class="box" x="458" y="200" width="148" height="22" rx="4" stroke-width="0.5"/>
+        <text class="ts" x="532" y="211" text-anchor="middle" dominant-baseline="central">QLOCAL — unchanged</text>
+        <line x1="148" y1="250" x2="148" y2="288" class="arr" marker-end="url(#ar3)"/>
+        <rect class="fill-purple" x="40" y="290" width="600" height="110" rx="12" stroke-width="0.5"/>
+        <text class="th" x="60" y="312" dominant-baseline="central">Blast-radius analysis</text>
+        <text class="ts" x="60" y="330" dominant-baseline="central">Enumerates every MQSC command the migration will run, before it runs.</text>
+        <rect class="box" x="58" y="346" width="564" height="40" rx="8" stroke-width="0.5"/>
+        <text class="ts" x="340" y="360" text-anchor="middle" dominant-baseline="central">Commands scoped to app A's queues only · commands touching co-tenant queues = 0</text>
+        <text class="ts" x="340" y="376" text-anchor="middle" dominant-baseline="central">Migration proceeds only when the co-tenant count is zero</text>
+        <line x1="340" y1="400" x2="340" y2="438" class="arr" marker-end="url(#ar3)"/>
+        <rect class="fill-green" x="120" y="440" width="440" height="60" rx="10" stroke-width="0.5"/>
+        <text class="th" x="340" y="460" text-anchor="middle" dominant-baseline="central">Apps B and C provably undisturbed</text>
+        <text class="ts" x="340" y="480" text-anchor="middle" dominant-baseline="central">Per-app rollback is local too — reverting A never touches B or C</text>
+      </svg>
+      <figcaption><b>The isolation proof.</b> Only the migrating app's queues are rewired. The blast-radius analysis verifies, before execution, that zero commands touch a co-tenant's queues. Rollback is local in the same way — reverting one app walks only that app's audit entries.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="statemachine">
+  <div class="wrap">
+    <h2><span class="num">07</span>The migration state machine</h2>
+    <p class="lead">Each application moves through a fixed sequence of states. A failure rolls that application back; the operator can then restart it.</p>
+    <p>Modelling the migration as an explicit state machine — rather than a script — means every application is always in a known, named state, every transition is audit-logged, and recovery is well-defined. The forward path runs nine states from <code>PLANNED</code> to <code>COMPLETED</code>. If any step fails, the engine transitions that application to <code>ROLLING_BACK</code>, undoing its steps in reverse order, and settles at <code>ROLLED_BACK</code> with the failure captured in the audit log. The operator can then restart the migration: the record recycles to <code>PLANNED</code> and the forward path — which is idempotent — runs again from the start.</p>
+    <figure>
+      <svg class="dgm" viewBox="0 0 680 1000" role="img" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="ar4" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#6b6f77" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+        </defs>
+        <rect class="fill-gray" x="120" y="40" width="300" height="56" rx="8" stroke-width="0.5"/>
+        <text class="th" x="270" y="58" text-anchor="middle" dominant-baseline="central">PLANNED</text>
+        <text class="ts" x="270" y="78" text-anchor="middle" dominant-baseline="central">Planner builds the per-app migration plan</text>
+        <line x1="270" y1="96" x2="270" y2="124" class="arr" marker-end="url(#ar4)"/>
+        <rect class="fill-blue" x="120" y="126" width="300" height="60" rx="8" stroke-width="0.5"/>
+        <text class="th" x="270" y="146" text-anchor="middle" dominant-baseline="central">PROVISIONING_TARGET_QM</text>
+        <text class="ts" x="270" y="164" text-anchor="middle" dominant-baseline="central">Deploy the app's dedicated target QM pod,</text>
+        <text class="ts" x="270" y="178" text-anchor="middle" dominant-baseline="central">then realize its MQ objects via MQSC</text>
+        <line x1="270" y1="186" x2="270" y2="214" class="arr" marker-end="url(#ar4)"/>
+        <rect class="fill-blue" x="120" y="216" width="300" height="60" rx="8" stroke-width="0.5"/>
+        <text class="th" x="270" y="236" text-anchor="middle" dominant-baseline="central">VALIDATING_PRE</text>
+        <text class="ts" x="270" y="254" text-anchor="middle" dominant-baseline="central">Confirm target QM is reachable and</text>
+        <text class="ts" x="270" y="268" text-anchor="middle" dominant-baseline="central">channels are running before cutover</text>
+        <line x1="270" y1="276" x2="270" y2="304" class="arr" marker-end="url(#ar4)"/>
+        <rect class="fill-blue" x="120" y="306" width="300" height="60" rx="8" stroke-width="0.5"/>
+        <text class="th" x="270" y="326" text-anchor="middle" dominant-baseline="central">REWIRING</text>
+        <text class="ts" x="270" y="344" text-anchor="middle" dominant-baseline="central">Redefine the source queues as QREMOTE</text>
+        <text class="ts" x="270" y="358" text-anchor="middle" dominant-baseline="central">aliases — traffic now routes to the target</text>
+        <line x1="270" y1="366" x2="270" y2="394" class="arr" marker-end="url(#ar4)"/>
+        <rect class="fill-blue" x="120" y="396" width="300" height="60" rx="8" stroke-width="0.5"/>
+        <text class="th" x="270" y="416" text-anchor="middle" dominant-baseline="central">DRAIN_WAIT</text>
+        <text class="ts" x="270" y="434" text-anchor="middle" dominant-baseline="central">Predict drain time from queue depth</text>
+        <text class="ts" x="270" y="448" text-anchor="middle" dominant-baseline="central">using Little's Law</text>
+        <line x1="270" y1="456" x2="270" y2="484" class="arr" marker-end="url(#ar4)"/>
+        <rect class="fill-blue" x="120" y="486" width="300" height="60" rx="8" stroke-width="0.5"/>
+        <text class="th" x="270" y="506" text-anchor="middle" dominant-baseline="central">VALIDATING_DURING</text>
+        <text class="ts" x="270" y="524" text-anchor="middle" dominant-baseline="central">Check messages flow through the new</text>
+        <text class="ts" x="270" y="538" text-anchor="middle" dominant-baseline="central">path while the source queue drains</text>
+        <line x1="270" y1="546" x2="270" y2="574" class="arr" marker-end="url(#ar4)"/>
+        <rect class="fill-blue" x="120" y="576" width="300" height="60" rx="8" stroke-width="0.5"/>
+        <text class="th" x="270" y="596" text-anchor="middle" dominant-baseline="central">DRAINING_SOURCE</text>
+        <text class="ts" x="270" y="614" text-anchor="middle" dominant-baseline="central">Poll the old source queue until depth</text>
+        <text class="ts" x="270" y="628" text-anchor="middle" dominant-baseline="central">reaches zero — no messages left behind</text>
+        <line x1="270" y1="636" x2="270" y2="664" class="arr" marker-end="url(#ar4)"/>
+        <rect class="fill-blue" x="120" y="666" width="300" height="60" rx="8" stroke-width="0.5"/>
+        <text class="th" x="270" y="686" text-anchor="middle" dominant-baseline="central">VALIDATING_POST</text>
+        <text class="ts" x="270" y="704" text-anchor="middle" dominant-baseline="central">Final check that the app is fully served</text>
+        <text class="ts" x="270" y="718" text-anchor="middle" dominant-baseline="central">by the target QM</text>
+        <line x1="270" y1="726" x2="270" y2="754" class="arr" marker-end="url(#ar4)"/>
+        <rect class="fill-green" x="120" y="756" width="300" height="56" rx="8" stroke-width="0.5"/>
+        <text class="th" x="270" y="774" text-anchor="middle" dominant-baseline="central">COMPLETED</text>
+        <text class="ts" x="270" y="794" text-anchor="middle" dominant-baseline="central">App migrated — source queues removed</text>
+        <rect class="fill-amber" x="470" y="126" width="170" height="60" rx="8" stroke-width="0.5"/>
+        <text class="th" x="555" y="146" text-anchor="middle" dominant-baseline="central">ROLLING_BACK</text>
+        <text class="ts" x="555" y="164" text-anchor="middle" dominant-baseline="central">Any step fails —</text>
+        <text class="ts" x="555" y="178" text-anchor="middle" dominant-baseline="central">undo in reverse order</text>
+        <path d="M420 156 L470 156" fill="none" stroke="#ba7517" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#ar4)"/>
+        <line x1="555" y1="186" x2="555" y2="214" class="arr" marker-end="url(#ar4)"/>
+        <rect class="fill-red" x="470" y="216" width="170" height="60" rx="8" stroke-width="0.5"/>
+        <text class="th" x="555" y="236" text-anchor="middle" dominant-baseline="central">ROLLED_BACK</text>
+        <text class="ts" x="555" y="254" text-anchor="middle" dominant-baseline="central">Source restored — error</text>
+        <text class="ts" x="555" y="268" text-anchor="middle" dominant-baseline="central">captured in audit log</text>
+        <rect class="fill-red" x="470" y="306" width="170" height="56" rx="8" stroke-width="0.5"/>
+        <text class="th" x="555" y="324" text-anchor="middle" dominant-baseline="central">ROLLBACK_FAILED</text>
+        <text class="ts" x="555" y="344" text-anchor="middle" dominant-baseline="central">Needs manual recovery</text>
+        <path d="M555 276 L555 306" fill="none" stroke="#a32d2d" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#ar4)"/>
+        <text class="ts" x="555" y="412" text-anchor="middle">Operator restarts —</text>
+        <text class="ts" x="555" y="428" text-anchor="middle">record recycles to PLANNED</text>
+        <path d="M555 276 L555 290 L660 290 L660 68 L420 68" fill="none" stroke="#1d9e75" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#ar4)"/>
+      </svg>
+      <figcaption><b>Twelve states.</b> The blue spine is the forward migration. The amber and red branch is the failure path — reached from any forward step. The green dashed line is the operator-initiated restart, which recycles the record to <code>PLANNED</code>.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="math">
+  <div class="wrap">
+    <h2><span class="num">08</span>The mathematics</h2>
+    <p class="lead">Two well-established models, used where they genuinely apply — and cited.</p>
+    <h3>Little's Law — drain-time prediction</h3>
+    <p>At cutover the engine must wait for the old source queue to empty. Rather than poll blindly, it predicts how long that will take. With the producer rewired away, no new messages arrive at the old queue, so the standard queueing relationship reduces to a direct estimate:</p>
+    <div class="formula">
+      L = &lambda;W&nbsp;&nbsp;&rarr;&nbsp;&nbsp;T_drain &asymp; L&#8320; / &mu;
+      <span class="where">L&#8320; = observed queue depth at rewire time &nbsp;·&nbsp; &mu; = consumer service rate, measured from the depth-decrease rate</span>
+    </div>
+    <p class="note">Reference: Little, J. D. C. (1961). "A Proof for the Queuing Formula: L = &lambda;W." <i>Operations Research</i>, 9(3), 383&ndash;387. The prediction is surfaced in the UI; the engine still confirms the actual drain by polling depth to zero.</p>
+    <h3>Absorbing Markov chain — reliability model</h3>
+    <p>The migration state machine is analysed as an absorbing Markov chain: <code>COMPLETED</code>, <code>ROLLED_BACK</code> and <code>ROLLBACK_FAILED</code> are absorbing states, the rest are transient. From the transition structure the system computes the standard fundamental-matrix quantities — expected number of steps to absorption, and the probability of ending in each absorbing state.</p>
+    <div class="formula">
+      N = (I &minus; Q)&#8315;&sup1;
+      <span class="where">Q = transient-to-transient transition submatrix &nbsp;·&nbsp; N = fundamental matrix, giving expected visits and steps to absorption</span>
+    </div>
+    <p class="note">Reference: Kemeny &amp; Snell, <i>Finite Markov Chains</i> (1960). The UI presents this reference model alongside an empirical transition estimate counted from the real audit log — model and measurement shown separately, never conflated.</p>
+  </div>
+</section>
+
+<section id="components">
+  <div class="wrap">
+    <h2><span class="num">09</span>Components</h2>
+    <p class="lead">What each part of the system does, in precise terms.</p>
+    <h3>Deterministic engines</h3>
+    <p class="note">Every state-changing action is performed by deterministic, code-reviewed engines — never by an LLM.</p>
+    <div class="grid">
+      <div class="card"><h4>Provisioning engine</h4><p>Deploys queue manager pods on OpenShift via the Kubernetes API, then realizes their MQ objects — DLQ, local queues, channels — by piping MQSC into the pod. Idempotent: safe to re-run.</p></div>
+      <div class="card"><h4>MQSC derivation</h4><p>Pure functions that compute the exact MQSC command set for a topology — queue and channel definitions — with no side effects. The single source of truth for what MQSC a topology requires.</p></div>
+      <div class="card"><h4>Migration engine</h4><p>Drives the per-app state machine. Sequences each transition, issues its MQSC, records every step, and on failure delegates to rollback. Resumable and idempotent.</p></div>
+      <div class="card"><h4>Rewiring choreography</h4><p>Builds the MQSC for the cutover: the XMITQ bridge, the SDR/RCVR channel pair, and the per-queue <code>QLOCAL</code>-to-<code>QREMOTE</code> swap.</p></div>
+      <div class="card"><h4>Drain detection</h4><p>Predicts drain time with Little's Law, then polls the source queue depth to a confirmed zero — the proof that no message was stranded at cutover.</p></div>
+      <div class="card"><h4>Rollback engine</h4><p>On failure, walks the application's audit entries in reverse Lamport order and undoes each completed step. Scoped to one application — never touches another.</p></div>
+    </div>
+    <h3>Agents</h3>
+    <p class="note">Three agents assist the operator, each backed by the Tachyon LLM (Gemini 2.5 Pro).</p>
+    <div class="grid">
+      <div class="card"><h4>Migration Planner <span class="tag">Agent 1</span></h4><p>Produces the per-application migration plan — the ordered step sequence and a plain-language summary the operator reviews before execution.</p></div>
+      <div class="card"><h4>Operator Assistant <span class="tag">Agent 2</span></h4><p>Answers free-text operator questions about migration status, the audit trail, rollbacks, and drain predictions. Every answer is drawn from live BCL data.</p></div>
+      <div class="card"><h4>RCA Assistant <span class="tag">Agent 3</span></h4><p>Diagnoses a failed migration: reads its Lamport-ordered audit trail, locates the failure event, names the MQ reason code, and produces a structured root-cause report.</p></div>
+    </div>
+    <h3>Analysis &amp; record</h3>
+    <div class="grid">
+      <div class="card"><h4>Blast-radius analysis</h4><p>Enumerates a migration's MQSC ahead of execution and proves the count of commands touching co-tenant queues is zero — the per-app isolation guarantee.</p></div>
+      <div class="card"><h4>Markov reliability</h4><p>Computes the absorbing-chain reliability model over the state machine, and an empirical transition estimate from the audit log.</p></div>
+      <div class="card"><h4>Lamport-clocked audit log</h4><p>Every state change writes one record carrying a Lamport clock, giving an unambiguous causal order. Held in SQLite — the system of record.</p></div>
+      <div class="card"><h4>Export endpoints</h4><p>Produce evidence on demand: the executed MQSC script, the audit log as CSV, a per-migration evidence bundle, and a health summary.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="ui">
+  <div class="wrap">
+    <h2><span class="num">10</span>The interface — what each page shows</h2>
+    <p class="lead">Four pages. Every operation is driven from the UI; nothing requires touching the backend.</p>
+    <table>
+      <thead><tr><th>Page</th><th>What it shows and why it matters</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><b>Dashboard</b></td>
+          <td>The estate at a glance — topology count, queue manager count, total audit events with the current Lamport clock, and migrations complete. Topologies can be ingested from CSV and provisioned here. It is the proof that the numbers across the system agree: queue managers counted here match the running OpenShift deployments.</td>
+        </tr>
+        <tr>
+          <td><b>Migrations</b></td>
+          <td>The operational heart. Each application's migration is shown with its current state, its step history, the Lamport-ordered audit timeline, and the Little's Law drain prediction. Migrations are started and rolled back here. The Operator Assistant and the Markov reliability panel live alongside.</td>
+        </tr>
+        <tr>
+          <td><b>Topology Viz</b></td>
+          <td>A visual view of the source and target topologies — which applications own which queues on which queue managers — and the blast-radius view that shows, per application, exactly which queues a migration would touch and confirms the co-tenants are not among them.</td>
+        </tr>
+        <tr>
+          <td><b>RCA</b></td>
+          <td>Root cause analysis. Select a migration and the RCA Assistant produces a structured diagnosis from its audit trail. A free-text box answers questions about any migration. Evidence — the MQSC script and the evidence bundle — is downloadable here.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="limits">
+  <div class="wrap">
+    <h2><span class="num">11</span>Honest scope and limits</h2>
+    <p class="lead">What this system is, and what it is deliberately not — stated plainly.</p>
+    <ul>
+      <li><b>Channel authentication.</b> Production deployments apply explicit per-peer channel-authentication rules, mapping each authorized partner queue manager to its permitted identity.</li>
+      <li><b>The reliability figure is a model, not a measurement.</b> The Markov analysis presents a reference model computed from the state machine's structure. It is shown alongside — and never merged with — the empirical estimate counted from real runs.</li>
+      <li><b>One application at a time.</b> The state machine and rollback are scoped per application by design. This is what makes isolation and recovery tractable; concurrent cross-application scheduling is out of scope for this phase.</li>
+      <li><b>The audit log is the system of record — not the LLM, not the UI.</b> Every claim the system makes can be traced to a Lamport-ordered audit entry.</li>
+    </ul>
+    <div class="callout">
+      <p><b>In one sentence.</b> IntelliAI 2.0 migrates production IBM MQ applications onto dedicated queue managers using MQ's own remote-queue routing, proves at every step that no message is lost and no co-tenant is disturbed, records everything in a causally-ordered audit log, and recovers cleanly from failure — all driven from a single control plane.</p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    IntelliAI 2.0 &middot; IBM MQ Hackathon 2026, Phase 2 &middot; IBM MQ 9.4.5 on OpenShift &middot; FastAPI &middot; Next.js &middot; SQLite
+  </div>
+</footer>
+
+</body>
+</html>
