@@ -115,8 +115,8 @@ export default function Dashboard() {
           label="Queue managers"
           value={qmCount}
           sub={
-            health && health.mq_total_count > 0
-              ? `${health.mq_reachable_count}/${health.mq_total_count} reachable`
+            qmCount > 0
+              ? `${qmCount} provisioned`
               : "none provisioned"
           }
         />
