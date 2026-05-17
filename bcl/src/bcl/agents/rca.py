@@ -609,4 +609,228 @@ async def diagnose_migration(
     )
 
 
-__all__ = ["RcaReport", "RcaEvidence", "diagnose_migration"]
+# -------------------------------------------------------------------------
+# Free-text question answering
+#
+# The RCA tab has a question box. The person types something like
+# "why did migration 3 fail" or "what is the reason code for ZN". This
+# resolves which migration they mean, runs the SAME deterministic
+# diagnosis as diagnose_migration, and answers.
+#
+# Provider behaviour - identical to the narrative path, driven by the
+# same BCL_LLM_PROVIDER flag:
+#   - stub:    the deterministic explainer answers from the structured
+#              evidence. The answer is real; only LLM phrasing is absent.
+#   - tachyon: the LLM phrases the answer over the same structured
+#              evidence. It is told not to invent anything.
+# No fake chat: on stub the answer is the structured diagnosis rendered
+# as prose, and the response labels itself "deterministic".
+# -------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RcaAnswer:
+    """Answer to a free-text RCA question."""
+
+    question: str
+    answer: str
+    answer_source: str            # 'llm' | 'deterministic'
+    resolved_migration_id: int | None
+    report: RcaReport | None      # the diagnosis the answer is based on
+
+
+def _resolve_migration_id(
+    question: str,
+    migrations: list[Migration],
+) -> int | None:
+    """Resolve which migration a free-text question is about.
+
+    Precedence: (1) an explicit id - "migration 3", "#3", "id 3";
+    (2) an app name - longest match wins so "APUMN/GC" beats a bare
+    "GC". If an app has several migrations the most recent (highest id)
+    is chosen. Returns None if neither resolves.
+    """
+    q = question.lower()
+
+    valid_ids = {m.id for m in migrations}
+    for m in re.finditer(r"(?:migration|id|#)\s*#?\s*(\d+)", q):
+        candidate = int(m.group(1))
+        if candidate in valid_ids:
+            return candidate
+
+    by_app: dict[str, list[Migration]] = {}
+    for mig in migrations:
+        by_app.setdefault(mig.app_id, []).append(mig)
+    for app_id in sorted(by_app, key=len, reverse=True):
+        if app_id.lower() in q:
+            return max(m.id for m in by_app[app_id])
+
+    return None
+
+
+def _deterministic_answer(question: str, report: "RcaReport") -> str:
+    """Deterministic prose answer, built from the structured report.
+
+    Adds nothing the report does not already contain. Used on the stub
+    provider, and as the fallback if the LLM path fails.
+    """
+    if not report.has_failure:
+        return (
+            f"Migration #{report.migration_id} of {report.app_id} is in "
+            f"state {report.migration_state}. No failed step or failed "
+            f"audit event was found in its trail - there is no root cause "
+            f"to diagnose."
+        )
+
+    parts: list[str] = [
+        f"Migration #{report.migration_id} of {report.app_id} "
+        f"({report.migration_state}): {report.primary_hypothesis}"
+    ]
+    if report.mq_reason_code:
+        parts.append(
+            f"MQ reason code {report.mq_reason_code}"
+            + (f" - {report.mq_reason_meaning}" if report.mq_reason_meaning else "")
+            + "."
+        )
+    parts.append(f"Confidence: {report.confidence}.")
+    if report.suggested_checks:
+        parts.append("Suggested check: " + report.suggested_checks[0])
+    return " ".join(parts)
+
+
+def _build_qa_llm_prompt(
+    question: str, report: "RcaReport"
+) -> tuple[str, str]:
+    """Render (system, user) prompts for the LLM question-answering path."""
+    system = (
+        "You are a Root Cause Analysis assistant for an IBM MQ migration "
+        "control plane. Answer the operator's question using ONLY the "
+        "structured diagnosis provided. Do not invent any cause or fact "
+        "not present in it. Be concise. State uncertainty honestly. Do "
+        "not recommend that the system take any action automatically - "
+        "only suggest checks a human performs."
+    )
+    ev = "; ".join(
+        f"[{e.source} L={e.lamport_clock} {e.operation}] {e.detail}"
+        for e in report.supporting_evidence
+    )
+    user = (
+        f"Operator question: {question}\n\n"
+        f"Structured diagnosis:\n"
+        f"  migration: #{report.migration_id} app={report.app_id} "
+        f"state={report.migration_state}\n"
+        f"  has_failure: {report.has_failure}\n"
+        f"  primary_hypothesis: {report.primary_hypothesis}\n"
+        f"  mq_reason_code: {report.mq_reason_code or 'none'}\n"
+        f"  confidence: {report.confidence}\n"
+        f"  evidence: {ev or 'none'}\n"
+        f"  suggested_checks: {'; '.join(report.suggested_checks)}\n\n"
+        "Answer the operator's question now."
+    )
+    return system, user
+
+
+async def answer_rca_question(
+    *,
+    question: str,
+    session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    correlation_id: str | None = None,
+) -> RcaAnswer:
+    """Answer a free-text RCA question.
+
+    Resolves the migration, runs the deterministic diagnosis, and
+    phrases an answer. LLM phrasing on the tachyon provider; the
+    deterministic explainer on stub. Read-only throughout.
+    """
+    q = (question or "").strip()
+    migrations = list(
+        (await session.execute(select(Migration))).scalars().all()
+    )
+
+    if not q:
+        return RcaAnswer(
+            question=question,
+            answer=(
+                "Ask about a specific migration - name an app (e.g. ZN) "
+                "or a migration id (e.g. 'migration 3')."
+            ),
+            answer_source="deterministic",
+            resolved_migration_id=None,
+            report=None,
+        )
+
+    mig_id = _resolve_migration_id(q, migrations)
+    if mig_id is None:
+        known_apps = ", ".join(sorted({m.app_id for m in migrations}))
+        return RcaAnswer(
+            question=question,
+            answer=(
+                "Could not tell which migration that question is about. "
+                f"Name an app or a migration id. Known apps: {known_apps}."
+            ),
+            answer_source="deterministic",
+            resolved_migration_id=None,
+            report=None,
+        )
+
+    report = await diagnose_migration(
+        migration_id=mig_id,
+        session=session,
+        session_factory=session_factory,
+        correlation_id=correlation_id,
+    )
+    if report is None:
+        return RcaAnswer(
+            question=question,
+            answer=f"Migration #{mig_id} could not be found.",
+            answer_source="deterministic",
+            resolved_migration_id=mig_id,
+            report=None,
+        )
+
+    answer_text: str
+    answer_source: str
+    llm_text: str | None = None
+    try:
+        system, user = _build_qa_llm_prompt(q, report)
+        llm_text, _inv = await run_text_agent(
+            agent_name=AgentName.RCA_ASSISTANT,
+            trigger="POST /rca/ask",
+            system_prompt=system,
+            user_prompt=user,
+            input_for_audit={
+                "question": q,
+                "resolved_migration_id": mig_id,
+                "has_failure": report.has_failure,
+            },
+            session_factory=session_factory,
+            correlation_id=correlation_id,
+        )
+    except Exception as exc:  # noqa: BLE001 - never let the QA path crash
+        logger.warning("RCA QA LLM path failed, using deterministic: %s", exc)
+        llm_text = None
+
+    if llm_text:
+        answer_text = llm_text
+        answer_source = "llm"
+    else:
+        answer_text = _deterministic_answer(q, report)
+        answer_source = "deterministic"
+
+    return RcaAnswer(
+        question=question,
+        answer=answer_text,
+        answer_source=answer_source,
+        resolved_migration_id=mig_id,
+        report=report,
+    )
+
+
+__all__ = [
+    "RcaReport",
+    "RcaEvidence",
+    "RcaAnswer",
+    "diagnose_migration",
+    "answer_rca_question",
+]

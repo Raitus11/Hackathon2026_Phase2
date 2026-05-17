@@ -499,6 +499,14 @@ export interface RcaReport {
   references: string[];
 }
 
+export interface RcaAnswer {
+  question: string;
+  answer: string;
+  answer_source: string;
+  resolved_migration_id: number | null;
+  report: RcaReport | null;
+}
+
 // ────────── Fetch helpers ──────────
 
 async function bclGet<T>(path: string): Promise<T> {
@@ -805,6 +813,8 @@ export const bcl = {
   rca: {
     forMigration: (migrationId: number) =>
       bclGet<RcaReport>(`/rca/migrations/${migrationId}`),
+    ask: (question: string) =>
+      bclPost<{ question: string }, RcaAnswer>("/rca/ask", { question }),
   },
 
   /**

@@ -7,6 +7,11 @@ GET /rca/migrations/{migration_id}
         checks — plus a narrative (LLM-written when BCL_LLM_PROVIDER is a
         real provider, deterministic explainer otherwise).
 
+POST /rca/ask
+        Free-text question ("why did migration 3 fail"). Resolves the
+        migration, runs the same diagnosis, answers. LLM phrasing on
+        the tachyon provider; deterministic explainer on stub.
+
 Read-only. Reads Migration / MigrationStep / AuditLog; issues no MQSC;
 changes no state. The only row written is the agent's own
 AgentInvocation audit record.
@@ -20,7 +25,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bcl.agents.rca import diagnose_migration
+from bcl.agents.rca import answer_rca_question, diagnose_migration
 from bcl.db.session import get_session, get_session_factory
 
 router = APIRouter(prefix="/rca", tags=["rca"])
@@ -78,6 +83,11 @@ async def get_rca(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Migration {migration_id} not found",
         )
+    return _to_report_out(report)
+
+
+def _to_report_out(report) -> RcaReportOut:
+    """Map an RcaReport dataclass to the API response model."""
     return RcaReportOut(
         migration_id=report.migration_id,
         app_id=report.app_id,
@@ -103,4 +113,47 @@ async def get_rca(
         narrative=report.narrative,
         narrative_source=report.narrative_source,
         references=report.references,
+    )
+
+
+class RcaAskRequest(BaseModel):
+    question: str
+
+
+class RcaAnswerOut(BaseModel):
+    question: str
+    answer: str
+    answer_source: str
+    resolved_migration_id: int | None
+    report: RcaReportOut | None
+
+
+@router.post(
+    "/ask",
+    response_model=RcaAnswerOut,
+    summary="Ask the RCA Assistant a free-text question",
+    description=(
+        "Free-text question answering. Resolves which migration the "
+        "question is about (by app name or migration id), runs the same "
+        "structured diagnosis, and answers. The answer is phrased by the "
+        "LLM when BCL_LLM_PROVIDER is a real provider, and by the "
+        "deterministic explainer on the stub provider \u2014 the structured "
+        "evidence is identical either way. Read-only."
+    ),
+)
+async def ask_rca(
+    body: RcaAskRequest,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> RcaAnswerOut:
+    result = await answer_rca_question(
+        question=body.question,
+        session=session,
+        session_factory=get_session_factory(),
+    )
+    return RcaAnswerOut(
+        question=result.question,
+        answer=result.answer,
+        answer_source=result.answer_source,
+        resolved_migration_id=result.resolved_migration_id,
+        report=_to_report_out(result.report) if result.report else None,
     )
