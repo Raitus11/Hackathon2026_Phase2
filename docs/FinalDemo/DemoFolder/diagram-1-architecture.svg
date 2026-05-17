@@ -1,0 +1,51 @@
+<svg viewBox="0 0 980 760" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <rect width="980" height="760" fill="#ffffff"/>
+  <!-- UI tier -->
+  <rect x="40" y="28" width="900" height="78" rx="8" fill="#efece6" stroke="#cbbfa8" stroke-width="1.5"/>
+  <text x="490" y="58" text-anchor="middle" font-size="18" font-weight="700" fill="#2b2b2b">UI — Next.js control plane</text>
+  <text x="490" y="84" text-anchor="middle" font-size="13" fill="#6b6b6b">Dashboard · Migrations · Topology Viz · RCA</text>
+  <!-- arrow -->
+  <line x1="490" y1="106" x2="490" y2="150" stroke="#888" stroke-width="1.6"/>
+  <polygon points="490,150 485,140 495,140" fill="#888"/>
+  <text x="520" y="132" font-size="12" fill="#6b6b6b">REST + SSE</text>
+  <!-- BCL tier -->
+  <rect x="40" y="152" width="900" height="430" rx="8" fill="#e6effa" stroke="#9cb9da" stroke-width="1.5"/>
+  <text x="66" y="184" font-size="17" font-weight="700" fill="#1f3f6b">Business Control Layer — FastAPI</text>
+  <text x="66" y="206" font-size="12.5" fill="#3f5f8b">The only component that talks to MQ. Every write is audit-logged.</text>
+  <!-- deterministic engines -->
+  <rect x="62" y="226" width="400" height="118" rx="7" fill="#e4f3e8" stroke="#8fc6a0" stroke-width="1.3"/>
+  <text x="262" y="252" text-anchor="middle" font-size="14.5" font-weight="700" fill="#22593a">Deterministic engines</text>
+  <text x="262" y="276" text-anchor="middle" font-size="12" fill="#3a6b4c">Provisioning · Migration state machine</text>
+  <text x="262" y="296" text-anchor="middle" font-size="12" fill="#3a6b4c">Rewiring · Drain · Rollback</text>
+  <text x="262" y="316" text-anchor="middle" font-size="12" fill="#3a6b4c">Policy guardrails · MQSC derivation</text>
+  <!-- agents -->
+  <rect x="518" y="226" width="400" height="118" rx="7" fill="#ece7f7" stroke="#b3a4d6" stroke-width="1.3"/>
+  <text x="718" y="252" text-anchor="middle" font-size="14.5" font-weight="700" fill="#4a3a7a">Agents — Tachyon LLM (Gemini 2.5 Pro)</text>
+  <text x="718" y="284" text-anchor="middle" font-size="12" fill="#5a4a8a">Migration Planner · Operator Assistant</text>
+  <text x="718" y="304" text-anchor="middle" font-size="12" fill="#5a4a8a">RCA Assistant</text>
+  <text x="718" y="324" text-anchor="middle" font-size="12" fill="#5a4a8a">LLM-backed · advisory, never state-changing</text>
+  <!-- analysis -->
+  <rect x="62" y="360" width="400" height="74" rx="7" fill="#e4f3e8" stroke="#8fc6a0" stroke-width="1.3"/>
+  <text x="262" y="390" text-anchor="middle" font-size="14.5" font-weight="700" fill="#22593a">Analysis modules</text>
+  <text x="262" y="412" text-anchor="middle" font-size="12" fill="#3a6b4c">Blast-radius · Markov reliability</text>
+  <!-- audit -->
+  <rect x="518" y="360" width="400" height="74" rx="7" fill="#fbeede" stroke="#e0b884" stroke-width="1.3"/>
+  <text x="718" y="390" text-anchor="middle" font-size="14.5" font-weight="700" fill="#8a5a1a">SQLite · Lamport-clocked audit log</text>
+  <text x="718" y="412" text-anchor="middle" font-size="12" fill="#a06b2a">System of record — every state change</text>
+  <!-- rest api -->
+  <rect x="62" y="450" width="856" height="68" rx="7" fill="#e6effa" stroke="#9cb9da" stroke-width="1.3"/>
+  <text x="490" y="479" text-anchor="middle" font-size="14.5" font-weight="700" fill="#1f3f6b">REST API</text>
+  <text x="490" y="501" text-anchor="middle" font-size="11.5" fill="#3f5f8b">/topologies · /migrations · /assistant · /rca · /reliability · /exports · /audit · /healthz</text>
+  <!-- arrow down -->
+  <line x1="490" y1="582" x2="490" y2="626" stroke="#888" stroke-width="1.6"/>
+  <polygon points="490,626 485,616 495,616" fill="#888"/>
+  <text x="520" y="608" font-size="12" fill="#6b6b6b">oc exec · runmqsc</text>
+  <!-- OCP tier -->
+  <rect x="40" y="628" width="900" height="108" rx="8" fill="#e7f0e2" stroke="#a3c490" stroke-width="1.5"/>
+  <text x="66" y="660" font-size="16" font-weight="700" fill="#3a5a2a">OpenShift namespace — roco-dev</text>
+  <text x="66" y="681" font-size="12" fill="#5a7a4a">Real IBM MQ 9.4.5 — provisioned and realized by the BCL</text>
+  <rect x="66" y="692" width="400" height="32" rx="5" fill="#d6e6cc" stroke="#a3c490"/>
+  <text x="266" y="713" text-anchor="middle" font-size="12.5" fill="#3a5a2a">9 source queue managers</text>
+  <rect x="514" y="692" width="400" height="32" rx="5" fill="#d6e6cc" stroke="#a3c490"/>
+  <text x="714" y="713" text-anchor="middle" font-size="12.5" fill="#3a5a2a">7 target queue managers</text>
+</svg>

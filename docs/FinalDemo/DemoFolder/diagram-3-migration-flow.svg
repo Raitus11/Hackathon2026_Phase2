@@ -1,0 +1,60 @@
+<svg viewBox="0 0 880 720" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <rect width="880" height="720" fill="#ffffff"/>
+  <!-- main column -->
+  <rect x="200" y="28" width="320" height="62" rx="7" fill="#efece6" stroke="#cbbfa8" stroke-width="1.4"/>
+  <text x="360" y="54" text-anchor="middle" font-size="14" font-weight="700" fill="#2b2b2b">UI — operator clicks Migrate</text>
+  <text x="360" y="74" text-anchor="middle" font-size="11" fill="#6b6b6b">POST /migrations</text>
+
+  <rect x="200" y="138" width="320" height="62" rx="7" fill="#e6effa" stroke="#9cb9da" stroke-width="1.4"/>
+  <text x="360" y="164" text-anchor="middle" font-size="14" font-weight="700" fill="#1f3f6b">BCL — migration endpoint</text>
+  <text x="360" y="184" text-anchor="middle" font-size="11" fill="#3f5f8b">Guardrails check · creates migration record</text>
+
+  <rect x="200" y="248" width="320" height="62" rx="7" fill="#ece7f7" stroke="#b3a4d6" stroke-width="1.4"/>
+  <text x="360" y="274" text-anchor="middle" font-size="14" font-weight="700" fill="#4a3a7a">Migration Planner agent</text>
+  <text x="360" y="294" text-anchor="middle" font-size="11" fill="#5a4a8a">Plan narrative · ordering rationale · risks</text>
+
+  <rect x="200" y="358" width="320" height="62" rx="7" fill="#e4f3e8" stroke="#8fc6a0" stroke-width="1.4"/>
+  <text x="360" y="384" text-anchor="middle" font-size="14" font-weight="700" fill="#22593a">Migration engine</text>
+  <text x="360" y="404" text-anchor="middle" font-size="11" fill="#3a6b4c">Drives the state machine · derives MQSC</text>
+
+  <rect x="200" y="468" width="320" height="62" rx="7" fill="#e7f0e2" stroke="#a3c490" stroke-width="1.4"/>
+  <text x="360" y="494" text-anchor="middle" font-size="14" font-weight="700" fill="#3a5a2a">OpenShift — roco-dev</text>
+  <text x="360" y="514" text-anchor="middle" font-size="11" fill="#5a7a4a">runmqsc applies MQSC on the queue managers</text>
+
+  <!-- audit log sidebar -->
+  <rect x="580" y="248" width="240" height="282" rx="7" fill="#fbeede" stroke="#e0b884" stroke-width="1.4"/>
+  <text x="700" y="284" text-anchor="middle" font-size="14" font-weight="700" fill="#8a5a1a">Audit log</text>
+  <text x="700" y="338" text-anchor="middle" font-size="11" fill="#a06b2a">Every step written</text>
+  <text x="700" y="356" text-anchor="middle" font-size="11" fill="#a06b2a">with a Lamport clock</text>
+  <text x="700" y="430" text-anchor="middle" font-size="11" fill="#a06b2a">SQLite —</text>
+  <text x="700" y="448" text-anchor="middle" font-size="11" fill="#a06b2a">system of record</text>
+
+  <!-- main arrows -->
+  <g stroke="#888" stroke-width="1.6" fill="#888">
+    <line x1="360" y1="90" x2="360" y2="138"/><polygon points="360,138 355,128 365,128"/>
+    <line x1="360" y1="200" x2="360" y2="248"/><polygon points="360,248 355,238 365,238"/>
+    <line x1="360" y1="310" x2="360" y2="358"/><polygon points="360,358 355,348 365,348"/>
+    <line x1="360" y1="420" x2="360" y2="468"/><polygon points="360,468 355,458 365,458"/>
+  </g>
+  <!-- audit write arrows -->
+  <g stroke="#e0a060" stroke-width="1.4" stroke-dasharray="5 4" fill="#e0a060">
+    <line x1="520" y1="279" x2="580" y2="300"/><polygon points="580,300 569,298 573,289"/>
+    <line x1="520" y1="389" x2="580" y2="400"/><polygon points="580,400 569,400 573,391"/>
+    <line x1="520" y1="499" x2="580" y2="470"/><polygon points="580,470 569,479 573,470"/>
+  </g>
+  <!-- bottom row -->
+  <rect x="80" y="600" width="320" height="74" rx="7" fill="#ece7f7" stroke="#b3a4d6" stroke-width="1.4"/>
+  <text x="240" y="630" text-anchor="middle" font-size="14" font-weight="700" fill="#4a3a7a">RCA Assistant agent</text>
+  <text x="240" y="652" text-anchor="middle" font-size="11" fill="#5a4a8a">Reads the audit trail to diagnose</text>
+  <text x="240" y="668" text-anchor="middle" font-size="11" fill="#5a4a8a">a failed migration</text>
+
+  <rect x="460" y="600" width="340" height="74" rx="7" fill="#e6effa" stroke="#9cb9da" stroke-width="1.4"/>
+  <text x="630" y="630" text-anchor="middle" font-size="14" font-weight="700" fill="#1f3f6b">Export endpoints</text>
+  <text x="630" y="652" text-anchor="middle" font-size="11" fill="#3f5f8b">MQSC script · evidence ZIP</text>
+  <text x="630" y="668" text-anchor="middle" font-size="11" fill="#3f5f8b">audit CSV · health summary</text>
+
+  <g stroke="#9aa0c0" stroke-width="1.4" stroke-dasharray="5 4" fill="#9aa0c0">
+    <line x1="640" y1="530" x2="380" y2="598"/><polygon points="380,598 388,591 391,600"/>
+    <line x1="700" y1="530" x2="660" y2="598"/><polygon points="660,598 657,588 667,591"/>
+  </g>
+</svg>
