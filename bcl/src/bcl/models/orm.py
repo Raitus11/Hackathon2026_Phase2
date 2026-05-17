@@ -205,10 +205,21 @@ class AuditOperation(str, enum.Enum):
 
 
 class AgentName(str, enum.Enum):
-    """The two agents in our scope (post-cuts)."""
+    """The agents in our scope.
+
+    All are read-only over BCL state and audit-logged on every
+    invocation. None has a write tool — destructive actions stay with
+    the deterministic engines and the operator. Each has a deterministic
+    fallback so the system degrades gracefully without the LLM.
+    """
 
     MIGRATION_PLANNER = "MIGRATION_PLANNER"
     OPERATOR_ASSISTANT = "OPERATOR_ASSISTANT"
+    RCA_ASSISTANT = "RCA_ASSISTANT"
+    """Root Cause Analysis. Reads the Lamport-ordered audit trail of a
+    migration, locates the failure event, names the MQ reason code, and
+    produces a structured diagnosis (hypothesis + evidence + suggested
+    human checks). Diagnosis only — it never remediates."""
 
 
 # ─────────────────────────────────────────────────────────────────────────

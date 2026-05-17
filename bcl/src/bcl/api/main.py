@@ -14,7 +14,9 @@ from bcl.api import (
     assistant,
     audit,
     blast_radius_api,
+    exports,
     health,
+    rca_api,
     message_flow,
     migration,
     provisioning,
@@ -83,6 +85,8 @@ def create_app() -> FastAPI:
     app.include_router(assistant.router)
     app.include_router(reliability_api.router)
     app.include_router(blast_radius_api.router)
+    app.include_router(rca_api.router)
+    app.include_router(exports.router)
 
     @app.get("/", include_in_schema=False)
     async def root() -> dict[str, str]:

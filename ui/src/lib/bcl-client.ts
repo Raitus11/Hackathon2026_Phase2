@@ -471,6 +471,34 @@ export interface MarkovAnalysis {
   method_reference: string;
 }
 
+// ────────── RCA — root cause analysis (agent #3) ──────────
+
+export interface RcaEvidence {
+  lamport_clock: number | null;
+  source: string;
+  operation: string;
+  detail: string;
+  relevance: string;
+}
+
+export interface RcaReport {
+  migration_id: number;
+  app_id: string;
+  migration_state: string;
+  has_failure: boolean;
+  primary_hypothesis: string;
+  confidence: string;
+  failure_event: string | null;
+  mq_reason_code: string | null;
+  mq_reason_meaning: string | null;
+  supporting_evidence: RcaEvidence[];
+  contributing_factors: string[];
+  suggested_checks: string[];
+  narrative: string;
+  narrative_source: string;
+  references: string[];
+}
+
 // ────────── Fetch helpers ──────────
 
 async function bclGet<T>(path: string): Promise<T> {
@@ -768,6 +796,28 @@ export const bcl = {
       bclGet<MigrationOrder>(
         `/topologies/${sourceTopologyId}/migration-order`,
       ),
+  },
+
+  /**
+   * RCA Assistant (agent #3) — root cause analysis for a migration.
+   * Read-only: reads the migration's audit trail, never changes state.
+   */
+  rca: {
+    forMigration: (migrationId: number) =>
+      bclGet<RcaReport>(`/rca/migrations/${migrationId}`),
+  },
+
+  /**
+   * Download endpoints. These return files (text / zip), not JSON, so
+   * they are exposed as URLs for the browser to fetch directly via an
+   * anchor — not through bclGet.
+   */
+  exportUrls: {
+    mqscScript: (migrationId: number) =>
+      `${BCL_BASE}/migrations/${migrationId}/mqsc-script`,
+    evidenceBundle: (migrationId: number) =>
+      `${BCL_BASE}/migrations/${migrationId}/evidence`,
+    auditCsv: () => `${BCL_BASE}/exports/audit.csv`,
   },
 };
 

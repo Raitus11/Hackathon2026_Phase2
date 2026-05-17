@@ -222,6 +222,15 @@ export default function Dashboard() {
             </span>
           </div>
 
+          <div className="flex justify-end border-b border-border-subtle px-4 py-2">
+            <a
+              href={bcl.exportUrls.auditCsv()}
+              className="rounded-md border border-border-subtle bg-bg-subtle px-3 py-1 text-xs text-fg hover:bg-bg-elevated"
+            >
+              ↓ Export audit log (.csv)
+            </a>
+          </div>
+
           {audit && audit.entries.length > 0 ? (
             <div className="divide-y divide-border-subtle">
               {audit.entries.slice(0, 10).map((e) => (

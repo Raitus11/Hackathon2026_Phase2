@@ -7,6 +7,7 @@ const LINKS = [
   { href: "/", label: "Dashboard" },
   { href: "/migrations", label: "Migrations" },
   { href: "/viz", label: "Topology Viz" },
+  { href: "/rca", label: "RCA" },
 ];
 
 export default function TopNav() {

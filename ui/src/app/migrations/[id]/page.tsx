@@ -288,6 +288,33 @@ export default function MigrationDetail({
         </section>
       )}
 
+      {/* Evidence exports — read-only downloads for THIS migration.
+          Generated from recorded BCL rows; no MQSC issued, no state
+          changed to produce them. */}
+      <section className="mb-6">
+        <div className="panel px-4 py-4">
+          <h2 className="mb-1 text-sm font-medium">Evidence exports</h2>
+          <p className="mb-3 text-[11px] text-fg-muted">
+            Read-only downloads for this migration, generated from
+            recorded BCL database rows.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <a
+              href={bcl.exportUrls.mqscScript(Number(migrationId))}
+              className="rounded-md border border-border-subtle bg-bg-subtle px-3 py-1.5 text-xs text-fg hover:bg-bg-elevated"
+            >
+              ↓ MQSC script (.mqsc)
+            </a>
+            <a
+              href={bcl.exportUrls.evidenceBundle(Number(migrationId))}
+              className="rounded-md border border-border-subtle bg-bg-subtle px-3 py-1.5 text-xs text-fg hover:bg-bg-elevated"
+            >
+              ↓ Evidence bundle (.zip)
+            </a>
+          </div>
+        </div>
+      </section>
+
       {/* Error banner */}
       {error && (
         <div className="fixed bottom-4 right-4 z-50 max-w-md rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-xs">
