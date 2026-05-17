@@ -161,7 +161,7 @@ export default function TopologyDetail({
     setPending(dryRun ? "dry-run" : "provision");
     try {
       await bcl.provisioning.start(topologyId, {
-        actor: "operator:raitus",
+        actor: "operator:demo",
         message: dryRun ? "dry run from UI" : "provision from UI",
         dry_run: dryRun,
       });
@@ -177,7 +177,7 @@ export default function TopologyDetail({
     setActionError(null);
     setPending("teardown-pods");
     try {
-      await bcl.provisioning.teardown(topologyId, "operator:raitus");
+      await bcl.provisioning.teardown(topologyId, "operator:demo");
       await Promise.all([mutateRuns(), mutateLiveRun()]);
       setConfirmTeardownPods(false);
     } catch (err) {
@@ -192,7 +192,7 @@ export default function TopologyDetail({
     setPending("realize-apply");
     try {
       await bcl.realize.start(topologyId, {
-        actor: "operator:raitus",
+        actor: "operator:demo",
         message: "realize MQ objects from UI",
       });
       await mutateRealizeRuns();
@@ -208,7 +208,7 @@ export default function TopologyDetail({
     setPending("realize-teardown");
     try {
       await bcl.realize.teardown(topologyId, {
-        actor: "operator:raitus",
+        actor: "operator:demo",
         message: "teardown MQ objects from UI",
       });
       await mutateRealizeRuns();
@@ -224,7 +224,7 @@ export default function TopologyDetail({
     setActionError(null);
     setPending("delete-topology");
     try {
-      await bcl.topologies.delete(topologyId, cascade, "operator:raitus");
+      await bcl.topologies.delete(topologyId, cascade, "operator:demo");
       router.push("/");
     } catch (err) {
       setActionError(String(err));

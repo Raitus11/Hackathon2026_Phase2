@@ -85,7 +85,7 @@ export default function MigrationDetail({
     setRollingBack(true);
     try {
       await bcl.migrations.rollback(migrationId, {
-        operator: "raitus",
+        operator: "demo",
         reason,
       });
       await mutateMigration();

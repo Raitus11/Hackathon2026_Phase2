@@ -71,10 +71,10 @@ class Settings(BaseSettings):
     mqsc_admin_rest_timeout_seconds: int = 10
 
     # ─── LLM provider ────────────────────────────────────────────────
-    # Office laptop: tachyon. stub: offline deterministic path.
+    # tachyon: real LLM gateway. stub: offline deterministic path.
     llm_provider: Literal["tachyon", "stub"] = "stub"
 
-    # Tachyon (office laptop)
+    # Tachyon LLM gateway settings
     tachyon_endpoint: str = ""
     tachyon_model: str = "gemini-2.5-pro"
     tachyon_api_key: str = ""

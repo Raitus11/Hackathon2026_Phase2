@@ -130,9 +130,13 @@ class TestLocalFlow:
             listener_port=1414,
         )
         ops = [c.op_kind for c in plan.commands]
-        # DLQ machinery first, then the local queue.
+        # Step 1 is three ALTER QMGR commands: DEADQ, CHLAUTH(DISABLED),
+        # REFRESH SECURITY (the 2026-05-14 patch that removed the manual
+        # MQSC unblocking step). Then the DLQ QLOCAL, then the queue.
         assert ops == [
-            AuditOperation.MQSC_ALTER_QMGR,
+            AuditOperation.MQSC_ALTER_QMGR,  # ALTER QMGR DEADQ
+            AuditOperation.MQSC_ALTER_QMGR,  # ALTER QMGR CHLAUTH(DISABLED)
+            AuditOperation.MQSC_ALTER_QMGR,  # REFRESH SECURITY TYPE(CONNAUTH)
             AuditOperation.MQSC_DEFINE_QLOCAL,  # SYSTEM.DEAD.LETTER.QUEUE
             AuditOperation.MQSC_DEFINE_QLOCAL,  # MY.QUEUE
         ]
@@ -141,7 +145,9 @@ class TestLocalFlow:
         assert plan.transmit_queues == ()
         assert plan.sender_channels == ()
         assert plan.receiver_channels == ()
-        assert plan.warnings == ()
+        # Step 1 disables CHLAUTH for demo compatibility and records a
+        # posture warning (tracked in the FMEA / Phase 3 backlog).
+        assert any("CHLAUTH disabled" in w for w in plan.warnings)
 
     def test_skips_flow_where_this_qm_uninvolved(self) -> None:
         flow = _local_flow(qm="WL6EEBDJ", queue="MY.QUEUE")
@@ -151,8 +157,9 @@ class TestLocalFlow:
             namespace="roco-dev",
             listener_port=1414,
         )
-        # Only DLQ machinery — the flow doesn't involve OTHER_QM at all.
-        assert len(plan.commands) == 2  # ALTER + DLQ QLOCAL
+        # Only step-1 machinery — the flow doesn't involve OTHER_QM at all.
+        # Step 1 = 3 ALTER QMGR (DEADQ, CHLAUTH, REFRESH) + DLQ QLOCAL.
+        assert len(plan.commands) == 4
         assert plan.local_queues == ()
 
 
@@ -172,11 +179,14 @@ class TestRemoteFlow:
 
         ops = [c.op_kind for c in plan.commands]
         assert ops == [
-            AuditOperation.MQSC_ALTER_QMGR,
+            AuditOperation.MQSC_ALTER_QMGR,           # ALTER QMGR DEADQ
+            AuditOperation.MQSC_ALTER_QMGR,           # CHLAUTH(DISABLED)
+            AuditOperation.MQSC_ALTER_QMGR,           # REFRESH SECURITY
             AuditOperation.MQSC_DEFINE_QLOCAL,        # DLQ
             AuditOperation.MQSC_DEFINE_QXMIT,
             AuditOperation.MQSC_DEFINE_QREMOTE,
-            AuditOperation.MQSC_DEFINE_CHANNEL_SDR,
+            AuditOperation.MQSC_DEFINE_CHANNEL_SDR,   # DEFINE CHANNEL
+            AuditOperation.MQSC_DEFINE_CHANNEL_SDR,   # START CHANNEL
         ]
 
         # Inspect the channel command for correct CONNAME
@@ -207,7 +217,9 @@ class TestRemoteFlow:
         )
         ops = [c.op_kind for c in plan.commands]
         assert ops == [
-            AuditOperation.MQSC_ALTER_QMGR,
+            AuditOperation.MQSC_ALTER_QMGR,           # ALTER QMGR DEADQ
+            AuditOperation.MQSC_ALTER_QMGR,           # CHLAUTH(DISABLED)
+            AuditOperation.MQSC_ALTER_QMGR,           # REFRESH SECURITY
             AuditOperation.MQSC_DEFINE_QLOCAL,        # DLQ
             AuditOperation.MQSC_DEFINE_QLOCAL,        # destination queue
             AuditOperation.MQSC_DEFINE_CHANNEL_RCVR,
@@ -254,8 +266,18 @@ class TestDeterminism:
         ops = [c.op_kind for c in plan.commands]
         assert ops.count(AuditOperation.MQSC_DEFINE_QREMOTE) == 1
         assert ops.count(AuditOperation.MQSC_DEFINE_QXMIT) == 1
-        assert ops.count(AuditOperation.MQSC_DEFINE_CHANNEL_SDR) == 1
-        assert plan.warnings == ()
+        # One SDR channel collapses to a DEFINE + a START command (both
+        # carry op_kind MQSC_DEFINE_CHANNEL_SDR), so count distinct
+        # channel objects rather than raw op occurrences.
+        sdr_objects = {
+            c.object_name
+            for c in plan.commands
+            if c.op_kind == AuditOperation.MQSC_DEFINE_CHANNEL_SDR
+        }
+        assert len(sdr_objects) == 1
+        # The only warning expected is the standard CHLAUTH posture note;
+        # there must be no dedup/duplicate-object warnings.
+        assert all("CHLAUTH disabled" in w for w in plan.warnings)
 
 
 class TestReplaceIdempotency:
@@ -300,13 +322,18 @@ class TestSurfacingNotRaising:
         # Both XMITQs are defined (objects must exist for QREMOTEs to resolve).
         assert "XMITQ_A" in plan.transmit_queues
         assert "XMITQ_B" in plan.transmit_queues
-        # But only one SDR channel (first-seen wins).
+        # But only one SDR channel object (first-seen wins). One channel
+        # yields a DEFINE + a START command, so compare distinct objects.
         sdrs = [
             c for c in plan.commands
             if c.op_kind == AuditOperation.MQSC_DEFINE_CHANNEL_SDR
         ]
-        assert len(sdrs) == 1
-        assert "XMITQ('XMITQ_A')" in sdrs[0].mqsc_text
+        sdr_objects = {c.object_name for c in sdrs}
+        assert len(sdr_objects) == 1
+        sdr_define = next(
+            c for c in sdrs if c.mqsc_text.startswith("DEFINE")
+        )
+        assert "XMITQ('XMITQ_A')" in sdr_define.mqsc_text
         # And a warning was recorded.
         assert any(
             "XMITQ_B" in w and "first-seen" in w for w in plan.warnings
@@ -368,27 +395,40 @@ def _qm_invariants(plan: MqscPlan, all_plans: dict[str, MqscPlan]) -> None:
                 f"{plan.transmit_queues}"
             )
 
-    # 2. Every SDR channel's XMITQ is defined on this QM.
+    # 2. Every SDR channel DEFINE's XMITQ is defined on this QM.
+    #    SDR-kind commands include START CHANNEL, which has no XMITQ
+    #    clause — check only the DEFINE.
     for cmd in plan.commands:
-        if cmd.op_kind == AuditOperation.MQSC_DEFINE_CHANNEL_SDR:
+        if (
+            cmd.op_kind == AuditOperation.MQSC_DEFINE_CHANNEL_SDR
+            and cmd.mqsc_text.startswith("DEFINE")
+        ):
             import re
             m = re.search(r"XMITQ\('([^']+)'\)", cmd.mqsc_text)
             assert m is not None
             assert m.group(1) in plan.transmit_queues
 
     # 3. Every command is non-empty and starts with a known verb.
-    known_verbs = ("ALTER", "DEFINE")
+    #    Step 1 adds REFRESH SECURITY; SDR channels add START CHANNEL.
+    known_verbs = ("ALTER", "DEFINE", "REFRESH", "START")
     for cmd in plan.commands:
         assert any(cmd.mqsc_text.startswith(v) for v in known_verbs), (
             f"Unknown verb in {cmd.mqsc_text}"
         )
 
-    # 4. First command is always ALTER QMGR DEADQ (DLQ is non-negotiable).
+    # 4. Step 1 is three ALTER QMGR commands: DEADQ, CHLAUTH(DISABLED),
+    #    REFRESH SECURITY. DLQ is non-negotiable; the CHLAUTH pair is the
+    #    2026-05-14 patch that removed the manual MQSC unblocking step.
     assert plan.commands[0].op_kind == AuditOperation.MQSC_ALTER_QMGR
+    assert "DEADQ" in plan.commands[0].mqsc_text
+    assert plan.commands[1].op_kind == AuditOperation.MQSC_ALTER_QMGR
+    assert "CHLAUTH" in plan.commands[1].mqsc_text
+    assert plan.commands[2].op_kind == AuditOperation.MQSC_ALTER_QMGR
+    assert "REFRESH SECURITY" in plan.commands[2].mqsc_text
 
-    # 5. Second command is the DLQ QLOCAL DEFINE.
-    assert plan.commands[1].op_kind == AuditOperation.MQSC_DEFINE_QLOCAL
-    assert "SYSTEM.DEAD.LETTER.QUEUE" in plan.commands[1].mqsc_text
+    # 5. Fourth command is the DLQ QLOCAL DEFINE.
+    assert plan.commands[3].op_kind == AuditOperation.MQSC_DEFINE_QLOCAL
+    assert "SYSTEM.DEAD.LETTER.QUEUE" in plan.commands[3].mqsc_text
 
 
 def _topology_invariants(plans: dict[str, MqscPlan]) -> None:
@@ -529,10 +569,13 @@ class TestInversePlan:
         )
         inv = inverse_plan(fwd)
         ops = [c.op_kind for c in inv.commands]
-        # Forward emits (after DLQ): QXMIT, QREMOTE, CHANNEL_SDR.
-        # Reverse-order deletes: CHANNEL, QREMOTE, QXMIT.
+        # Forward emits (after step 1): QXMIT, QREMOTE, SDR DEFINE, SDR
+        # START. Reverse-order teardown: STOP CHANNEL, DELETE CHANNEL,
+        # DELETE QREMOTE, DELETE QXMIT. STOP + DELETE channel both carry
+        # op_kind MQSC_DELETE_CHANNEL.
         assert ops == [
-            AuditOperation.MQSC_DELETE_CHANNEL,
+            AuditOperation.MQSC_DELETE_CHANNEL,   # STOP CHANNEL
+            AuditOperation.MQSC_DELETE_CHANNEL,   # DELETE CHANNEL
             AuditOperation.MQSC_DELETE_QREMOTE,
             AuditOperation.MQSC_DELETE_QXMIT,
         ]
@@ -587,7 +630,10 @@ class TestInversePlan:
         # to converge.
         for inv_cmd in inv.commands:
             assert inv_cmd.rollback_text is not None
-            assert inv_cmd.rollback_text.startswith("DEFINE")
+            # The inverse of a DELETE is a DEFINE; the inverse of a STOP
+            # CHANNEL is a START CHANNEL. Both are legitimate forward
+            # rollback verbs — the inverse-of-inverse converges either way.
+            assert inv_cmd.rollback_text.startswith(("DEFINE", "START"))
 
     def test_real_csv_round_trip_object_inventory(self) -> None:
         """Apply forward + inverse over the full source.csv:

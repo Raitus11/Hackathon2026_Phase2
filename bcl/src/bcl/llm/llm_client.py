@@ -7,7 +7,7 @@ and never reach for HTTP directly.
 Backends:
 
   - tachyon: Wells Fargo's internal LLM gateway exposing Gemini 2.5
-             Pro and friends. Used on office laptops where the network
+             Pro and friends. Used in environments where the network
              reaches the Tachyon Apigee gateway. Reached through the
              `tachyon-langchain-client` package.
   - stub:    a deterministic in-process echo backend. Returns a

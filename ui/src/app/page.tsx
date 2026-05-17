@@ -360,7 +360,7 @@ function CsvIngestCard({
         file,
         name,
         kind,
-        actor: "operator:raitus",
+        actor: "operator:demo",
       });
       // Reset
       setFile(null);

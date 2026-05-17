@@ -579,7 +579,7 @@ class AgentInvocation(Base):
     """List of {tool_name, args, result_summary} for each tool call."""
 
     model: Mapped[str] = mapped_column(String(64), nullable=False)
-    """e.g. 'groq:llama-3.3-70b', 'tachyon:gemini-2.5-pro'."""
+    """e.g. 'tachyon:gemini-2.5-pro', 'stub:deterministic'."""
 
     tokens_in: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tokens_out: Mapped[int | None] = mapped_column(Integer, nullable=True)

@@ -100,7 +100,7 @@ const CANNED_AUDIT_ENTRIES: MigrationAuditEntry[] = [
     lamport_clock: 300,
     wall_clock: "2026-05-15T21:32:12",
     operation: "MIGRATION_PLANNED",
-    actor: "operator:raitus",
+    actor: "operator:demo",
     qm_name: null,
     success: true,
     duration_ms: 4,
