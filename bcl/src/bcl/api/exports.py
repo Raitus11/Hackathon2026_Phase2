@@ -57,6 +57,78 @@ def _scrub(text: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# Audit CSV — shared column schema
+#
+# One schema, used by both the global audit export and the per-migration
+# evidence bundle, so the two never drift. The columns are everything an
+# operator or judge needs to read the trail without opening the BCL: the
+# Lamport clock and wall clock, who acted, what operation, which app and
+# QM, the migration state transition, the MQSC command itself (pulled out
+# of request_payload), success / rollback flags, timing, and any error.
+# ─────────────────────────────────────────────────────────────────────────
+
+_AUDIT_CSV_HEADER = [
+    "lamport_clock",
+    "wall_clock",
+    "correlation_id",
+    "actor",
+    "operation",
+    "app_id",
+    "qm_name",
+    "state_before",
+    "state_after",
+    "mqsc_command",
+    "success",
+    "is_rollback",
+    "duration_ms",
+    "error_message",
+]
+
+
+def _state_str(value: object) -> str:
+    """Render a state column. state_before/after may be a plain string or
+    a small JSON dict like {"state": "REWIRING"} — handle both."""
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        return str(value.get("state", value))
+    return str(value)
+
+
+def _mqsc_from_payload(payload: object) -> str:
+    """Pull the MQSC command text out of an audit row's request_payload,
+    if present. State-changing MQSC ops record it there. Best-effort —
+    returns '' when the row carries no MQSC."""
+    if not isinstance(payload, dict):
+        return ""
+    for key in ("mqsc_text", "mqsc", "command"):
+        v = payload.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return ""
+
+
+def _audit_csv_row(r: AuditLog) -> list[object]:
+    """One enriched audit row, matching _AUDIT_CSV_HEADER."""
+    return [
+        r.lamport_clock,
+        r.wall_clock.isoformat() if r.wall_clock else "",
+        r.correlation_id,
+        r.actor,
+        r.operation.value,
+        r.app_id or "",
+        r.qm_name or "",
+        _state_str(r.state_before),
+        _state_str(r.state_after),
+        _scrub(_mqsc_from_payload(r.request_payload)),
+        r.success,
+        r.is_rollback,
+        r.duration_ms if r.duration_ms is not None else "",
+        _scrub(r.error_message or ""),
+    ]
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # 1. MQSC script download
 # ─────────────────────────────────────────────────────────────────────────
 
@@ -164,37 +236,9 @@ async def export_audit_csv(
 
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(
-        [
-            "lamport_clock",
-            "wall_clock",
-            "correlation_id",
-            "actor",
-            "operation",
-            "app_id",
-            "qm_name",
-            "success",
-            "is_rollback",
-            "duration_ms",
-            "error_message",
-        ]
-    )
+    writer.writerow(_AUDIT_CSV_HEADER)
     for r in rows:
-        writer.writerow(
-            [
-                r.lamport_clock,
-                r.wall_clock.isoformat() if r.wall_clock else "",
-                r.correlation_id,
-                r.actor,
-                r.operation.value,
-                r.app_id or "",
-                r.qm_name or "",
-                r.success,
-                r.is_rollback,
-                r.duration_ms if r.duration_ms is not None else "",
-                _scrub(r.error_message or ""),
-            ]
-        )
+        writer.writerow(_audit_csv_row(r))
     csv_text = buf.getvalue()
     fname = "audit-log.csv" if app_id is None else f"audit-{app_id}.csv".replace(
         "/", "_"
@@ -333,25 +377,12 @@ async def download_evidence_bundle(
     # MQSC script.
     mqsc_script = _render_mqsc_script(migration, list(steps))
 
-    # Audit CSV.
+    # Audit CSV — same enriched schema as the global export.
     abuf = io.StringIO()
     aw = csv.writer(abuf)
-    aw.writerow(
-        ["lamport_clock", "wall_clock", "operation", "success",
-         "is_rollback", "duration_ms", "error_message"]
-    )
+    aw.writerow(_AUDIT_CSV_HEADER)
     for r in audit:
-        aw.writerow(
-            [
-                r.lamport_clock,
-                r.wall_clock.isoformat() if r.wall_clock else "",
-                r.operation.value,
-                r.success,
-                r.is_rollback,
-                r.duration_ms if r.duration_ms is not None else "",
-                _scrub(r.error_message or ""),
-            ]
-        )
+        aw.writerow(_audit_csv_row(r))
 
     # Summary.
     n_steps = len(steps)

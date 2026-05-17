@@ -52,9 +52,11 @@ export default function RcaWorkspace() {
         <p className="mt-1 text-sm text-fg-muted">
           Agent #3 — the RCA Assistant. It reads a migration&apos;s
           Lamport-ordered audit trail, finds the failure event, names the
-          MQ reason code, and produces a structured diagnosis. Read-only:
-          it issues no MQSC and changes no state. Every run is
-          audit-logged as an agent invocation.
+          MQ reason code, and produces a structured diagnosis. The
+          narrative is phrased by the LLM (Tachyon / Gemini 2.5 Pro) with
+          a deterministic explainer as fallback; the evidence is the same
+          either way. Read-only: it issues no MQSC and changes no state.
+          Every run is audit-logged as an agent invocation.
         </p>
       </header>
 

@@ -513,8 +513,10 @@ function OperatorAssistantPanel() {
             <h2 className="text-sm font-medium">Operator Assistant</h2>
             <p className="mt-0.5 text-xs text-fg-muted">
               Agent #2. Ask about migration status, the Lamport-ordered audit
-              trail, rollbacks, drain predictions, or agent activity. Answers
-              come from live BCL data; every query is audit-logged as an
+              trail, rollbacks, drain predictions, or agent activity. Facts
+              come from live BCL data; the answer is phrased by the LLM
+              (Tachyon / Gemini 2.5 Pro) with a deterministic fallback when
+              the LLM is unavailable. Every query is audit-logged as an
               AGENT_INVOCATION.
             </p>
           </div>
