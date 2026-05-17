@@ -186,6 +186,12 @@ class TopologyOut(_ImmutableModel):
     spec: dict[str, Any]
     created_at: datetime
     queue_managers: list[QueueManagerOut] = Field(default_factory=list)
+    qm_count: int = 0
+    """Number of QueueManager rows for this topology. The list endpoint
+    populates this (cheap COUNT) without loading the full queue_managers
+    list; the single-topology endpoint loads queue_managers in full and
+    qm_count mirrors its length. Lets the dashboard show a real count
+    without eager-loading every QM."""
 
 
 # ─────────────────────────────────────────────────────────────────────────

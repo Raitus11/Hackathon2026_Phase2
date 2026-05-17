@@ -37,7 +37,7 @@ export default function Dashboard() {
           : "text-danger";
 
   const qmCount =
-    topologies?.reduce((sum, t) => sum + t.queue_managers.length, 0) ?? 0;
+    topologies?.reduce((sum, t) => sum + t.qm_count, 0) ?? 0;
   const auditTotal = audit?.total_count ?? audit?.entries.length ?? 0;
   const lamport = health?.lamport_clock ?? "—";
 
@@ -185,8 +185,8 @@ export default function Dashboard() {
                     </span>
                   </span>
                   <span className="col-span-2 font-mono text-fg-muted">
-                    {t.queue_managers.length} QM
-                    {t.queue_managers.length === 1 ? "" : "s"}
+                    {t.qm_count} QM
+                    {t.qm_count === 1 ? "" : "s"}
                   </span>
                   <span className="col-span-2 text-right text-fg-subtle">
                     →

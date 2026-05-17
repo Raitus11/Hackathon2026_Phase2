@@ -38,6 +38,10 @@ export interface Topology {
   spec: Record<string, unknown>;
   created_at: string;
   queue_managers: QueueManager[];
+  /** QM count. Populated by both the list and single-topology
+   * endpoints; the list endpoint does not load the full
+   * queue_managers array, so prefer qm_count for counts. */
+  qm_count: number;
 }
 
 export interface AuditEntry {

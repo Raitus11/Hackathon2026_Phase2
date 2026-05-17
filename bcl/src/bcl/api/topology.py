@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bcl.audit.writer import write_audit_entry
@@ -143,10 +143,20 @@ async def list_topologies(
         select(Topology).order_by(Topology.created_at.desc())
     )
     topologies = result.scalars().all()
+
+    # QM count per topology in one grouped query — cheap, avoids
+    # eager-loading every QueueManager row just to show a count.
+    count_rows = await session.execute(
+        select(QueueManager.topology_id, func.count())
+        .group_by(QueueManager.topology_id)
+    )
+    qm_counts: dict[int, int] = {tid: n for tid, n in count_rows}
+
     return [
         TopologyOut(
             id=t.id, name=t.name, kind=t.kind, spec=t.spec,
             created_at=t.created_at, queue_managers=[],
+            qm_count=qm_counts.get(t.id, 0),
         )
         for t in topologies
     ]
@@ -176,6 +186,7 @@ async def get_topology(
             )
             for qm in topology.queue_managers
         ],
+        qm_count=len(topology.queue_managers),
     )
 
 
