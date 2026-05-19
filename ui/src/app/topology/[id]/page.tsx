@@ -18,6 +18,7 @@ import {
   type TestMessageResult,
   type Topology,
 } from "@/lib/bcl-client";
+import ProvisioningTopologyView from "@/components/ProvisioningTopologyView";
 
 export default function TopologyDetail({
   params,
@@ -506,6 +507,13 @@ export default function TopologyDetail({
             onPendingChange={(p) => setPending(p ? "test-message" : null)}
             onError={setActionError}
           />
+        </section>
+      )}
+
+      {/* Provisioning topology — read-only connection graph */}
+      {topology && topology.queue_managers.length > 0 && (
+        <section className="mb-6">
+          <ProvisioningTopologyView topology={topology} />
         </section>
       )}
 

@@ -31,6 +31,27 @@ export interface QueueManager {
   is_ready: boolean;
 }
 
+/** One flow row from the source/target CSV — a single producer→consumer
+ *  application pair. Lives inside Topology.spec.flows. The BCL accepts a
+ *  historical typo for consumer_neighbourhood on the wire but always
+ *  emits the corrected spelling, so only the correct key is typed here. */
+export interface FlowSpec {
+  flow_type: "Local" | "Remote";
+  producer_app_id: string;
+  producer_app_name: string;
+  producer_neighbourhood: string;
+  producer_queue_manager: string;
+  producer_queue_name: string;
+  producer_queue_type: "Local" | "Remote";
+  transmit_queue_name: string | null;
+  channel_name: string | null;
+  consumer_app_id: string;
+  consumer_app_name: string;
+  consumer_neighbourhood: string;
+  consumer_queue_manager: string;
+  consumer_queue_name: string;
+}
+
 export interface Topology {
   id: number;
   name: string;
