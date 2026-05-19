@@ -105,9 +105,15 @@ class MigrationState(str, enum.Enum):
     """Per-app migration state machine.
 
     Forward path:
-        PLANNED → PROVISIONING_TARGET_QM → VALIDATING_PRE → REWIRING
-        → DRAIN_WAIT → VALIDATING_DURING → DRAINING_SOURCE
+        PLANNED → AWAITING_APPROVAL → PROVISIONING_TARGET_QM → VALIDATING_PRE
+        → REWIRING → DRAIN_WAIT → VALIDATING_DURING → DRAINING_SOURCE
         → VALIDATING_POST → COMPLETED
+
+    Human approval gate:
+        After the planner runs, the engine parks the migration in
+        AWAITING_APPROVAL and stops. An operator reviews the plan +
+        risk brief + go/no-go score, then POSTs /approve (→ resume the
+        forward path) or /abort (→ ROLLING_BACK → ROLLED_BACK).
 
     Failure / rollback:
         any-state → ROLLING_BACK → ROLLED_BACK
@@ -115,6 +121,7 @@ class MigrationState(str, enum.Enum):
     """
 
     PLANNED = "PLANNED"
+    AWAITING_APPROVAL = "AWAITING_APPROVAL"
     PROVISIONING_TARGET_QM = "PROVISIONING_TARGET_QM"
     VALIDATING_PRE = "VALIDATING_PRE"
     REWIRING = "REWIRING"
@@ -188,6 +195,12 @@ class AuditOperation(str, enum.Enum):
     MIGRATION_STEP_COMPLETED = "MIGRATION_STEP_COMPLETED"
     MIGRATION_STEP_FAILED = "MIGRATION_STEP_FAILED"
 
+    # Human approval gate
+    MIGRATION_AWAITING_APPROVAL = "MIGRATION_AWAITING_APPROVAL"
+    MIGRATION_APPROVED = "MIGRATION_APPROVED"
+    MIGRATION_ABORTED = "MIGRATION_ABORTED"
+    PREFLIGHT_RISK_BRIEF = "PREFLIGHT_RISK_BRIEF"
+
     # Validation
     VALIDATION_RUN = "VALIDATION_RUN"
 
@@ -215,6 +228,20 @@ class AgentName(str, enum.Enum):
 
     MIGRATION_PLANNER = "MIGRATION_PLANNER"
     OPERATOR_ASSISTANT = "OPERATOR_ASSISTANT"
+    PREFLIGHT_AUDITOR = "PREFLIGHT_AUDITOR"
+    """Pre-Flight Risk Auditor. Runs once, between planning and the
+    human approval gate. Reads the deterministic blast-radius analysis
+    + the planner's plan, and produces a structured risk brief: the
+    non-obvious hazards an operator should weigh before approving.
+    Advisory only — it cannot start, stop, or alter a migration. Has a
+    deterministic fallback like every other agent."""
+    COMPLIANCE_NARRATOR = "COMPLIANCE_NARRATOR"
+    """Compliance Narrator. Runs once, when a migration reaches a
+    terminal state (COMPLETED or ROLLED_BACK). Reads the migration's
+    Lamport-ordered audit trail and produces an evidence-cited Markdown
+    narrative for the per-app evidence bundle — the kind of document a
+    SOX-style auditor would expect. Read-only; advisory; has a
+    deterministic templated fallback."""
     RCA_ASSISTANT = "RCA_ASSISTANT"
     """Root Cause Analysis. Reads the Lamport-ordered audit trail of a
     migration, locates the failure event, names the MQ reason code, and

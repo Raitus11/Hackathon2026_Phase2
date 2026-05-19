@@ -71,13 +71,17 @@ class Settings(BaseSettings):
     mqsc_admin_rest_timeout_seconds: int = 10
 
     # ─── LLM provider ────────────────────────────────────────────────
-    # tachyon: real LLM gateway. stub: offline deterministic path.
+    # Selected by BCL_LLM_PROVIDER.
+    #   tachyon: real LLM gateway. stub: offline deterministic path.
     llm_provider: Literal["tachyon", "stub"] = "stub"
 
-    # Tachyon LLM gateway settings
-    tachyon_endpoint: str = ""
+    # The Tachyon model name passed to TachyonLangchainClient.
+    # NOTE: the gateway credentials (USE_API_GATEWAY, USE_CASE_ID,
+    # BASE_URL, API_KEY, CONSUMER_KEY, CONSUMER_SECRET, APIGEE_URL,
+    # CERTS_PATH) are NOT BCL settings. They are read straight from
+    # the environment / .env by the tachyon-langchain-client package
+    # itself. The BCL only owns the provider flag and the model name.
     tachyon_model: str = "gemini-2.5-pro"
-    tachyon_api_key: str = ""
 
     llm_request_timeout_seconds: int = 60
     llm_max_tokens: int = 2048

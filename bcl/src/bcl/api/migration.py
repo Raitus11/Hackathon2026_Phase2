@@ -29,6 +29,9 @@ from bcl.db.session import get_session, get_session_factory
 from bcl.migration import engine as migration_engine
 from bcl.migration import states
 from bcl.models.api import (
+    GateAbortRequest,
+    GateApproveRequest,
+    GateReviseRequest,
     MigrationOut,
     MigrationPlanRequest,
     MigrationStepOut,
@@ -233,6 +236,174 @@ async def manual_rollback(
             detail="migration row vanished",
         )
     return _to_migration_out(m)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Human approval gate — approve / abort / revise / inspect
+# ─────────────────────────────────────────────────────────────────────────
+
+
+@router.get(
+    "/{migration_id}/gate",
+    summary="The approval-gate package: plan + risk brief + go/no-go score",
+    description=(
+        "Returns everything an operator needs to decide at the "
+        "AWAITING_APPROVAL gate: the Migration Planner's plan, the "
+        "Pre-Flight Risk Auditor's risk brief, the decision-theoretic "
+        "go/no-go score (expected-cost-of-proceed vs expected-cost-of-"
+        "defer), and the full revision history if the plan has been "
+        "revised. The go/no-go score is computed by "
+        "analysis.decision.evaluate_gate over the migration's absorbing "
+        "Markov chain (Kemeny & Snell, 1960) under a von Neumann–"
+        "Morgenstern expected-utility criterion."
+    ),
+)
+async def get_migration_gate(
+    migration_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> dict[str, Any]:
+    m = await session.get(Migration, migration_id)
+    if m is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"migration {migration_id} not found",
+        )
+    plan_blob = m.plan or {}
+    return {
+        "migration_id": migration_id,
+        "state": m.state.value,
+        "at_gate": m.state == MigrationState.AWAITING_APPROVAL,
+        "plan": plan_blob.get("plan"),
+        "planner_input": plan_blob.get("planner_input"),
+        "risk_brief": plan_blob.get("risk_brief"),
+        "go_no_go": plan_blob.get("go_no_go"),
+        "revision_history": plan_blob.get("revision_history", []),
+        "approval": plan_blob.get("approval"),
+        "compliance_narrative": plan_blob.get("compliance_narrative"),
+    }
+
+
+@router.post(
+    "/{migration_id}/approve",
+    response_model=MigrationOut,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Approve a migration parked at the human approval gate",
+    description=(
+        "The migration must be in AWAITING_APPROVAL. On approval the "
+        "engine resumes the forward state-machine path "
+        "(PROVISIONING_TARGET_QM → … → COMPLETED). The approval is "
+        "audit-logged with the operator identity. Returns 202; poll "
+        "GET /migrations/{id} for status. Returns 409 if the migration "
+        "is not at the gate."
+    ),
+)
+async def approve_migration(
+    migration_id: int,
+    body: GateApproveRequest,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> MigrationOut:
+    try:
+        await migration_engine.resume_migration(
+            migration_id=migration_id,
+            operator=body.operator,
+            session_factory=get_session_factory(),
+        )
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc),
+        ) from exc
+
+    m = await migration_engine.get_migration(session, migration_id)
+    if m is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="migration row vanished",
+        )
+    return _to_migration_out(m)
+
+
+@router.post(
+    "/{migration_id}/abort",
+    response_model=MigrationOut,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Abort a migration parked at the human approval gate",
+    description=(
+        "The migration must be in AWAITING_APPROVAL. The abort routes "
+        "through the rollback engine — which has nothing to undo, since "
+        "no MQSC fired before the gate — so the migration settles in a "
+        "uniform ROLLED_BACK terminal state. The operator decision and "
+        "reason are audit-logged. Returns 409 if not at the gate."
+    ),
+)
+async def abort_migration_at_gate(
+    migration_id: int,
+    body: GateAbortRequest,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> MigrationOut:
+    try:
+        await migration_engine.abort_at_gate(
+            migration_id=migration_id,
+            operator=body.operator,
+            reason=body.reason,
+            session_factory=get_session_factory(),
+        )
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc),
+        ) from exc
+
+    m = await migration_engine.get_migration(session, migration_id)
+    if m is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="migration row vanished",
+        )
+    return _to_migration_out(m)
+
+
+@router.post(
+    "/{migration_id}/revise",
+    summary="Revise a migration plan at the approval gate (re-plan loop)",
+    description=(
+        "The migration must be in AWAITING_APPROVAL. The operator's "
+        "free-text instruction is folded into the Migration Planner as "
+        "advisory guidance; the planner, the Pre-Flight Risk Auditor, "
+        "and the go/no-go decision score all re-run. The migration "
+        "STAYS in AWAITING_APPROVAL — revise never executes MQSC and "
+        "never advances the state machine. Every revision is appended "
+        "to the plan's revision_history. Returns the new gate package "
+        "(revised plan + risk brief + go/no-go score). Returns 409 if "
+        "the migration is not at the gate."
+    ),
+)
+async def revise_migration_at_gate(
+    migration_id: int,
+    body: GateReviseRequest,
+) -> dict[str, Any]:
+    try:
+        result = await migration_engine.re_plan_at_gate(
+            migration_id=migration_id,
+            operator=body.operator,
+            instruction=body.instruction,
+            session_factory=get_session_factory(),
+        )
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc),
+        ) from exc
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────

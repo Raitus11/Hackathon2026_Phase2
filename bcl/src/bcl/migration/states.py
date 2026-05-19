@@ -7,9 +7,15 @@ follow which. Code that mutates Migration.state must go through
 are checked.
 
 Forward path:
-    PLANNED -> PROVISIONING_TARGET_QM -> VALIDATING_PRE -> REWIRING
-    -> DRAIN_WAIT -> VALIDATING_DURING -> DRAINING_SOURCE
+    PLANNED -> AWAITING_APPROVAL -> PROVISIONING_TARGET_QM -> VALIDATING_PRE
+    -> REWIRING -> DRAIN_WAIT -> VALIDATING_DURING -> DRAINING_SOURCE
     -> VALIDATING_POST -> COMPLETED
+
+Human approval gate:
+    The engine parks the migration in AWAITING_APPROVAL after the
+    planner + risk auditor run, and stops. An operator POSTs an
+    explicit approve/abort decision. Approve resumes the forward
+    path; abort routes through ROLLING_BACK like any other failure.
 
 Failure path (from any non-terminal state):
     <state> -> ROLLING_BACK -> ROLLED_BACK
@@ -42,6 +48,10 @@ from bcl.models.orm import MigrationState
 # non-terminal state.
 _FORWARD_TRANSITIONS: dict[MigrationState, frozenset[MigrationState]] = {
     MigrationState.PLANNED: frozenset({
+        MigrationState.AWAITING_APPROVAL,
+        MigrationState.ROLLING_BACK,
+    }),
+    MigrationState.AWAITING_APPROVAL: frozenset({
         MigrationState.PROVISIONING_TARGET_QM,
         MigrationState.ROLLING_BACK,
     }),
@@ -90,6 +100,7 @@ _FORWARD_TRANSITIONS: dict[MigrationState, frozenset[MigrationState]] = {
 # report the same percent as the last forward state for continuity.
 PROGRESS_PERCENT: dict[MigrationState, int] = {
     MigrationState.PLANNED: 0,
+    MigrationState.AWAITING_APPROVAL: 8,
     MigrationState.PROVISIONING_TARGET_QM: 15,
     MigrationState.VALIDATING_PRE: 25,
     MigrationState.REWIRING: 45,
@@ -159,6 +170,7 @@ def next_forward(state: MigrationState) -> MigrationState | None:
     """
     forward_path = [
         MigrationState.PLANNED,
+        MigrationState.AWAITING_APPROVAL,
         MigrationState.PROVISIONING_TARGET_QM,
         MigrationState.VALIDATING_PRE,
         MigrationState.REWIRING,

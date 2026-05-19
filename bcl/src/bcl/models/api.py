@@ -238,6 +238,42 @@ class MigrationExecuteRequest(_MutableModel):
     """Identity of the human operator approving execution. Audit-logged."""
 
 
+class GateApproveRequest(_MutableModel):
+    """POST /migrations/{id}/approve — operator approves at the gate.
+
+    The migration must be in AWAITING_APPROVAL. On approval the engine
+    resumes the forward path. Every approval is audit-logged with the
+    operator identity.
+    """
+
+    operator: str = Field(min_length=1, max_length=64)
+
+
+class GateAbortRequest(_MutableModel):
+    """POST /migrations/{id}/abort — operator aborts at the gate.
+
+    The migration must be in AWAITING_APPROVAL. Routes through the
+    rollback engine (which has nothing to undo pre-gate) so the
+    terminal state is a uniform ROLLED_BACK.
+    """
+
+    operator: str = Field(min_length=1, max_length=64)
+    reason: str = Field(min_length=1, max_length=1024)
+
+
+class GateReviseRequest(_MutableModel):
+    """POST /migrations/{id}/revise — operator requests a re-plan.
+
+    The free-text instruction is folded into the Migration Planner as
+    advisory guidance. The planner + Pre-Flight Risk Auditor + go/no-go
+    score all re-run; the migration stays in AWAITING_APPROVAL. Revise
+    never executes MQSC and never advances the state machine.
+    """
+
+    operator: str = Field(min_length=1, max_length=64)
+    instruction: str = Field(min_length=1, max_length=2000)
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Validation
 # ─────────────────────────────────────────────────────────────────────────
@@ -398,6 +434,9 @@ __all__ = [
     "FlowSpec",
     "HealthOut",
     "MigrationExecuteRequest",
+    "GateApproveRequest",
+    "GateAbortRequest",
+    "GateReviseRequest",
     "MigrationOut",
     "MigrationPlanRequest",
     "MigrationStepOut",

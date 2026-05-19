@@ -141,6 +141,14 @@ class PlannerInput(BaseModel):
     app_role_summary: str
     """Brief description: 'producer', 'consumer', 'producer + consumer'."""
 
+    revision_instruction: str | None = None
+    """Optional operator free-text from the Revise loop at the approval
+    gate. When set, the planner re-plans with this instruction folded
+    in as advisory guidance. It influences the narrative, ordering
+    rationale and risk framing only — never the operational fields
+    (bridge naming, queues_to_redirect), which the engine re-asserts.
+    None on the first plan."""
+
 
 # ─────────────────────────────────────────────────────────────────────────
 # Public API
@@ -367,6 +375,23 @@ the narrative or in a DRAIN_TIME risk if relevant.
 
 
 def _render_planner_user_prompt(p: PlannerInput) -> str:
+    revision_block = ""
+    if p.revision_instruction:
+        revision_block = f"""\
+
+── OPERATOR REVISION REQUEST ──
+An operator reviewed a previous version of this plan at the approval
+gate and asked for a revision. Their instruction, verbatim:
+
+  "{p.revision_instruction}"
+
+Treat this as advisory guidance. Re-plan accordingly: adjust the
+narrative, ordering_rationale and risks to reflect the operator's
+concern. You MAY NOT change the operational fields (bridge naming,
+queues_to_redirect) — those are fixed by the engine. If the
+instruction asks for something outside your control, say so plainly
+in the narrative rather than pretending to comply.
+"""
     return f"""\
 Plan a migration for the following application.
 
@@ -389,7 +414,7 @@ bridge_xmitq_name: {p.bridge_xmitq_name}
 
 queues_to_redirect (count={len(p.queues_to_redirect)}):
 {chr(10).join(f"  - {q}" for q in p.queues_to_redirect) or "  (none)"}
-
+{revision_block}
 Produce the migration plan JSON.
 """
 
@@ -438,9 +463,8 @@ async def narrate_completion(
     }
 
     text, _invocation = await run_text_agent(
-        agent_name=AgentName.MIGRATION_PLANNER,  # Reuse enum; narrator is
-                                                  # a Planner sub-mode.
-        trigger="POST /migrations narrate-completion",
+        agent_name=AgentName.COMPLIANCE_NARRATOR,
+        trigger="migration reached terminal state (narrate)",
         system_prompt=_NARRATOR_SYSTEM_PROMPT,
         user_prompt=user_prompt,
         input_for_audit=input_for_audit,

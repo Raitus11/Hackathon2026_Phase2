@@ -21,6 +21,7 @@ from bcl.api import (
     migration,
     provisioning,
     reliability_api,
+    statistical_api,
     topology,
 )
 from bcl.audit.lamport import LamportClock
@@ -84,6 +85,7 @@ def create_app() -> FastAPI:
     app.include_router(audit.router)
     app.include_router(assistant.router)
     app.include_router(reliability_api.router)
+    app.include_router(statistical_api.router)
     app.include_router(blast_radius_api.router)
     app.include_router(rca_api.router)
     app.include_router(exports.router)

@@ -247,6 +247,7 @@ export interface CsvIngestResponse extends Topology {
  */
 export type MigrationState =
   | "PLANNED"
+  | "AWAITING_APPROVAL"
   | "PROVISIONING_TARGET_QM"
   | "VALIDATING_PRE"
   | "REWIRING"
@@ -262,6 +263,7 @@ export type MigrationState =
 /** Ordered linear path through forward states. Used by the stepper. */
 export const FORWARD_STATES: MigrationState[] = [
   "PLANNED",
+  "AWAITING_APPROVAL",
   "PROVISIONING_TARGET_QM",
   "VALIDATING_PRE",
   "REWIRING",
@@ -414,6 +416,143 @@ export interface MigrationPlanResponse {
   planner_audit?: MigrationPlanWrapper["planner_audit"];
   planner_input?: Record<string, unknown>;
   note?: string;
+}
+
+// ────────── Human approval gate (NEW) ──────────
+
+/** One hazard from the Pre-Flight Risk Auditor agent. */
+export interface PreflightFinding {
+  severity: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
+  category: string;
+  title: string;
+  detail: string;
+  recommendation: string;
+}
+
+/** The Pre-Flight Risk Auditor's structured risk brief. */
+export interface PreflightRiskBrief {
+  findings: PreflightFinding[];
+  overall_assessment:
+    | "CLEAR"
+    | "PROCEED_WITH_CARE"
+    | "REVIEW_BEFORE_APPROVING";
+  summary: string;
+}
+
+/**
+ * Decision-theoretic go/no-go score. Expected-cost-of-proceed vs
+ * expected-cost-of-defer over the migration's absorbing Markov chain.
+ */
+export interface GoNoGoDecision {
+  recommendation: "PROCEED" | "PROCEED_WITH_CAUTION" | "DEFER";
+  expected_cost_proceed: number;
+  expected_cost_defer: number;
+  advantage: number;
+  outcome_distribution: {
+    p_completed: number;
+    p_rolled_back: number;
+    p_rollback_failed: number;
+  };
+  confidence: number;
+  cost_model: Record<string, number>;
+  adjustment: Record<string, number>;
+  rationale: string;
+  references: string[];
+}
+
+export interface GateRevisionEntry {
+  revised_at: string;
+  operator: string;
+  instruction: string;
+  superseded_plan: MigrationPlanData | null;
+  superseded_go_no_go: GoNoGoDecision | null;
+}
+
+export interface GateApproval {
+  decision: "APPROVED" | "ABORTED";
+  operator: string;
+  reason?: string;
+  at: string;
+}
+
+/** Subset of the planner input the gate UI needs for the topology view. */
+export interface GatePlannerInput {
+  app_id: string;
+  app_name: string;
+  neighbourhood: string;
+  source_qm: string;
+  target_qm: string;
+  target_qm_provisioned: boolean;
+  queues_to_redirect: string[];
+  bridge_channel_name: string;
+  bridge_xmitq_name: string;
+  app_role_summary: string;
+}
+
+/** GET /migrations/{id}/gate — the full approval-gate package. */
+export interface MigrationGate {
+  migration_id: number;
+  state: MigrationState;
+  at_gate: boolean;
+  plan: MigrationPlanData | null;
+  planner_input: GatePlannerInput | null;
+  risk_brief: PreflightRiskBrief | null;
+  go_no_go: GoNoGoDecision | null;
+  revision_history: GateRevisionEntry[];
+  approval: GateApproval | null;
+  compliance_narrative: {
+    markdown: string;
+    generated_at: string;
+  } | null;
+}
+
+export interface GateReviseResponse {
+  migration_id: number;
+  revision_number: number;
+  plan: MigrationPlanData;
+  risk_brief: PreflightRiskBrief;
+  go_no_go: GoNoGoDecision;
+}
+
+// ────────── Statistical validation (NEW) ──────────
+
+export interface WelchResult {
+  test: string;
+  n_pre: number;
+  n_post: number;
+  mean_pre: number;
+  mean_post: number;
+  var_pre: number;
+  var_post: number;
+  t_statistic: number;
+  degrees_of_freedom: number;
+  p_value: number;
+  reject_h0: boolean;
+  outcome: "PASS" | "WARN" | "FAIL";
+  interpretation: string;
+  reference: string;
+}
+
+export interface ChiSquareResult {
+  test: string;
+  categories: string[];
+  observed: number[];
+  expected: number[];
+  chi_square: number;
+  degrees_of_freedom: number;
+  p_value: number;
+  reject_h0: boolean;
+  outcome: "PASS" | "WARN" | "FAIL";
+  interpretation: string;
+  reference: string;
+}
+
+export interface StatisticalValidation {
+  combined_outcome: "PASS" | "WARN" | "FAIL";
+  summary: string;
+  welch_t_test: WelchResult;
+  chi_square_gof: ChiSquareResult;
+  references: string[];
 }
 
 // ────────── Operator Assistant (Agent #2) ──────────
@@ -765,6 +904,58 @@ export const bcl = {
       bclGet<MigrationPlanResponse>(`/migrations/${id}/plan`),
     drain: (id: number | string) =>
       bclGet<MigrationDrainResponse>(`/migrations/${id}/drain`),
+
+    /**
+     * Human approval gate. After planning, the engine parks the
+     * migration in AWAITING_APPROVAL and stops. gate() returns the
+     * plan + Pre-Flight Risk Auditor brief + go/no-go decision score.
+     * The operator then approve()s, abort()s, or revise()s.
+     */
+    gate: (id: number | string) =>
+      bclGet<MigrationGate>(`/migrations/${id}/gate`),
+    approve: (id: number | string, operator: string) =>
+      bclPost<{ operator: string }, Migration>(
+        `/migrations/${id}/approve`,
+        { operator },
+      ),
+    abort: (id: number | string, operator: string, reason: string) =>
+      bclPost<{ operator: string; reason: string }, Migration>(
+        `/migrations/${id}/abort`,
+        { operator, reason },
+      ),
+    revise: (
+      id: number | string,
+      operator: string,
+      instruction: string,
+    ) =>
+      bclPost<
+        { operator: string; instruction: string },
+        GateReviseResponse
+      >(`/migrations/${id}/revise`, { operator, instruction }),
+  },
+
+  /**
+   * Statistical equivalence testing — Welch's t-test (latency) and
+   * Pearson's chi-square goodness-of-fit (message disposition). Turns
+   * "validation passed" into a signed statistical statement.
+   */
+  statistical: {
+    validate: (body: {
+      latency_pre: number[];
+      latency_post: number[];
+      disposition_categories: string[];
+      disposition_observed_post: number[];
+      disposition_expected_pre: number[];
+    }) =>
+      bclPost<typeof body, StatisticalValidation>(
+        "/statistical/validate",
+        body,
+      ),
+    welch: (pre: number[], post: number[], label = "latency") =>
+      bclPost<
+        { pre: number[]; post: number[]; label: string },
+        WelchResult
+      >("/statistical/welch", { pre, post, label }),
   },
 
   /**
@@ -893,6 +1084,8 @@ export function migrationStateLabel(state: MigrationState): string {
   switch (state) {
     case "PLANNED":
       return "planned";
+    case "AWAITING_APPROVAL":
+      return "awaiting approval";
     case "PROVISIONING_TARGET_QM":
       return "provisioning target";
     case "VALIDATING_PRE":
@@ -923,6 +1116,8 @@ export function migrationStateShortLabel(state: MigrationState): string {
   switch (state) {
     case "PLANNED":
       return "plan";
+    case "AWAITING_APPROVAL":
+      return "gate";
     case "PROVISIONING_TARGET_QM":
       return "prov.";
     case "VALIDATING_PRE":

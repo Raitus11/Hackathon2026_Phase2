@@ -18,11 +18,13 @@ import {
   type Migration,
   type MigrationAuditEntry,
   type MigrationDrainResponse,
+  type MigrationGate,
   type MigrationPlanData,
   type MigrationRisk,
   type MigrationState,
   type MigrationStep,
 } from "@/lib/bcl-client";
+import ApprovalGate from "@/components/ApprovalGate";
 
 /**
  * Migration Detail Page.
@@ -71,6 +73,15 @@ export default function MigrationDetail({
     migration ? `/migrations/${migrationId}/drain` : null,
     () => bcl.migrations.drain(migrationId),
     { refreshInterval: isLive ? 3000 : 15000 },
+  );
+
+  // Approval-gate package — plan + risk brief + go/no-go score.
+  // Polled while the migration is at (or has passed through) the gate.
+  const atGate = migration?.state === "AWAITING_APPROVAL";
+  const { data: gateResp, mutate: mutateGate } = useSWR<MigrationGate>(
+    migration ? `/migrations/${migrationId}/gate` : null,
+    () => bcl.migrations.gate(migrationId),
+    { refreshInterval: atGate ? 3000 : 0 },
   );
 
   // ─── actions ───────────────────────────────────────────────
@@ -237,6 +248,22 @@ export default function MigrationDetail({
           </div>
         </div>
       </section>
+
+      {/* Human approval gate — rendered while parked at AWAITING_APPROVAL */}
+      {atGate && gateResp && (
+        <section className="mb-6">
+          <ApprovalGate
+            gate={gateResp}
+            operator="demo"
+            onResolved={() => {
+              void mutateMigration();
+            }}
+            onRevised={() => {
+              void mutateGate();
+            }}
+          />
+        </section>
+      )}
 
       {/* Plan panel */}
       {plan && (

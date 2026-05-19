@@ -55,6 +55,7 @@ from bcl.migration.drain import (
 from bcl.models.api import FlowSpec
 from bcl.models.orm import (
     Application,
+    AuditLog,
     AuditOperation,
     Migration,
     MigrationState,
@@ -309,86 +310,537 @@ async def _execute_migration(
         actor=actor,
     )
 
-    # Persist plan on the Migration row, then transition out of PLANNED.
+    # ── Pre-flight risk audit + go/no-go decision score ─────────────
+    # Runs between planning and the human approval gate. Both have
+    # deterministic fallbacks; neither can block the engine.
+    gate_package = await _build_gate_package(
+        app_id=app_id,
+        source_topology_id=source_topology_id,
+        target_topology_id=target_topology_id,
+        plan=plan,
+        namespace=namespace,
+        listener_port=listener_port,
+        session_factory=session_factory,
+        correlation_id=correlation_id,
+        actor=actor,
+    )
+
+    # Persist plan + gate package on the Migration row.
     async with session_factory() as session:
         m = await _fetch_migration(session, migration_id)
         m.plan = {
             "plan": plan.model_dump(),
             "planner_audit": planner_audit,
             "planner_input": planner_input.model_dump(),
+            "risk_brief": gate_package["risk_brief"],
+            "auditor_audit": gate_package["auditor_audit"],
+            "go_no_go": gate_package["go_no_go"],
+            "revision_history": [],
+            "approval": None,
         }
         m.started_at = datetime.now(UTC)
         await session.commit()
 
-    # ── State machine loop ──────────────────────────────────────────
+    # ── Park at the human approval gate and STOP. ───────────────────
+    # The engine does not advance past AWAITING_APPROVAL on its own.
+    # An operator must POST /migrations/{id}/approve (→ resume) or
+    # /migrations/{id}/abort (→ rollback). This is the "AI proposes,
+    # human disposes" control point — every destructive MQSC command
+    # downstream of here is gated on an explicit human decision.
+    await _transition(
+        session_factory, migration_id, MigrationState.AWAITING_APPROVAL,
+        correlation_id=correlation_id, actor=actor,
+        reason="plan + risk brief ready; awaiting operator decision",
+    )
+    async with session_factory() as session:
+        await write_audit_entry(
+            session,
+            operation=AuditOperation.MIGRATION_AWAITING_APPROVAL,
+            success=True,
+            actor=actor,
+            correlation_id=correlation_id,
+            app_id=app_id,
+            request_payload={
+                "migration_id": migration_id,
+                "go_no_go_recommendation":
+                    gate_package["go_no_go"]["recommendation"],
+                "risk_finding_count":
+                    len(gate_package["risk_brief"].get("findings", [])),
+            },
+            state_after={"state": MigrationState.AWAITING_APPROVAL.value},
+        )
+        await session.commit()
+    logger.info(
+        "migration %s parked at approval gate (go/no-go: %s)",
+        migration_id, gate_package["go_no_go"]["recommendation"],
+    )
+    # Background task ends here. resume_migration() picks up on approve.
+
+
+async def _build_gate_package(
+    *,
+    app_id: str,
+    source_topology_id: int,
+    target_topology_id: int,
+    plan: MigrationPlan,
+    namespace: str,
+    listener_port: int,
+    session_factory: async_sessionmaker[AsyncSession],
+    correlation_id: str,
+    actor: str,
+) -> dict[str, Any]:
+    """Run the Pre-Flight Risk Auditor + the go/no-go decision score.
+
+    Returns a dict with `risk_brief`, `auditor_audit`, `go_no_go`.
+    Pure-ish: the auditor may call the LLM (with a deterministic
+    fallback); the decision score is deterministic.
+    """
+    from bcl.agents.preflight_auditor import audit_migration
+    from bcl.analysis.decision import evaluate_gate
+
+    # Fetch the source + target topology specs for the blast-radius pass.
+    async with session_factory() as session:
+        src = await session.get(Topology, source_topology_id)
+        tgt = await session.get(Topology, target_topology_id)
+        src_spec = dict(src.spec) if src is not None else {}
+        tgt_spec = dict(tgt.spec) if tgt is not None else {}
+
+    brief, auditor_audit = await audit_migration(
+        app_id=app_id,
+        source_topology_spec=src_spec,
+        target_topology_spec=tgt_spec,
+        plan_dict=plan.model_dump(),
+        target_qm_namespace=namespace,
+        target_qm_listener_port=listener_port,
+        session_factory=session_factory,
+        correlation_id=correlation_id,
+        actor=actor,
+    )
+
+    decision = evaluate_gate(brief.severities())
+
+    # Audit-log the risk brief as its own operation so it appears on
+    # the Lamport timeline between planning and the gate.
+    async with session_factory() as session:
+        await write_audit_entry(
+            session,
+            operation=AuditOperation.PREFLIGHT_RISK_BRIEF,
+            success=True,
+            actor=actor,
+            correlation_id=correlation_id,
+            app_id=app_id,
+            request_payload={
+                "finding_count": len(brief.findings),
+                "overall_assessment": brief.overall_assessment,
+            },
+            response_payload={
+                "go_no_go": decision.recommendation,
+                "expected_cost_proceed":
+                    round(decision.expected_cost_proceed, 4),
+                "expected_cost_defer":
+                    round(decision.expected_cost_defer, 4),
+            },
+        )
+        await session.commit()
+
+    return {
+        "risk_brief": brief.model_dump(),
+        "auditor_audit": auditor_audit,
+        "go_no_go": decision.to_dict(),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Forward path — runs ONLY after explicit human approval
+# ─────────────────────────────────────────────────────────────────────────
+
+
+async def resume_migration(
+    *,
+    migration_id: int,
+    operator: str,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Resume a migration that an operator has approved at the gate.
+
+    Called by POST /migrations/{id}/approve. Re-derives the runtime
+    context (the migration's background task ended when it parked at
+    AWAITING_APPROVAL) and drives the forward path to COMPLETED or,
+    on any failure, ROLLING_BACK.
+
+    Idempotency: refuses unless the migration is in AWAITING_APPROVAL.
+    """
+    settings = get_settings()
+    async with session_factory() as session:
+        m = await _fetch_migration(session, migration_id)
+        if m.state != MigrationState.AWAITING_APPROVAL:
+            raise ValueError(
+                f"migration {migration_id} is in state {m.state.value}; "
+                "only AWAITING_APPROVAL migrations can be approved."
+            )
+        app_id = m.app_id
+        source_topology_id = m.source_topology_id
+        target_topology_id = m.target_topology_id
+
+    correlation_id = await _correlation_id_for(session_factory, migration_id)
+
+    # Record the approval decision on the Lamport timeline + plan JSON.
+    async with session_factory() as session:
+        m = await _fetch_migration(session, migration_id)
+        plan_blob = dict(m.plan or {})
+        plan_blob["approval"] = {
+            "decision": "APPROVED",
+            "operator": operator,
+            "at": datetime.now(UTC).isoformat(),
+        }
+        m.plan = plan_blob
+        await write_audit_entry(
+            session,
+            operation=AuditOperation.MIGRATION_APPROVED,
+            success=True,
+            actor=f"operator:{operator}",
+            correlation_id=correlation_id,
+            app_id=app_id,
+            request_payload={"migration_id": migration_id},
+            state_before={"state": MigrationState.AWAITING_APPROVAL.value},
+        )
+        await session.commit()
+
+    ctx = await _build_runtime_context(
+        migration_id=migration_id,
+        app_id=app_id,
+        source_topology_id=source_topology_id,
+        target_topology_id=target_topology_id,
+        correlation_id=correlation_id,
+        actor=f"operator:{operator}",
+        session_factory=session_factory,
+        namespace=settings.namespace,
+        listener_port=settings.mq_listener_port,
+    )
+    if ctx is None:
+        await _abort(
+            session_factory, migration_id, correlation_id,
+            f"operator:{operator}",
+            reason=(
+                "could not rebuild runtime context on resume "
+                "(pods unresolvable). Re-provision both topologies."
+            ),
+        )
+        return
+
+    asyncio.create_task(_run_forward_path(ctx))
+
+
+async def abort_at_gate(
+    *,
+    migration_id: int,
+    operator: str,
+    reason: str,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Abort a migration parked at the approval gate.
+
+    Called by POST /migrations/{id}/abort. Routes through the same
+    ROLLING_BACK → ROLLED_BACK path as any other failure, so the
+    audit story is uniform — the rollback engine simply has nothing
+    to undo (no MQSC fired before the gate). Refuses unless the
+    migration is in AWAITING_APPROVAL.
+    """
+    settings = get_settings()
+    async with session_factory() as session:
+        m = await _fetch_migration(session, migration_id)
+        if m.state != MigrationState.AWAITING_APPROVAL:
+            raise ValueError(
+                f"migration {migration_id} is in state {m.state.value}; "
+                "only AWAITING_APPROVAL migrations can be aborted at the "
+                "gate."
+            )
+        app_id = m.app_id
+        source_topology_id = m.source_topology_id
+        target_topology_id = m.target_topology_id
+        plan_blob = dict(m.plan or {})
+        plan_blob["approval"] = {
+            "decision": "ABORTED",
+            "operator": operator,
+            "reason": reason,
+            "at": datetime.now(UTC).isoformat(),
+        }
+        m.plan = plan_blob
+        await session.commit()
+
+    correlation_id = await _correlation_id_for(session_factory, migration_id)
+
+    async with session_factory() as session:
+        await write_audit_entry(
+            session,
+            operation=AuditOperation.MIGRATION_ABORTED,
+            success=True,
+            actor=f"operator:{operator}",
+            correlation_id=correlation_id,
+            app_id=app_id,
+            request_payload={
+                "migration_id": migration_id, "reason": reason,
+            },
+        )
+        await session.commit()
+
+    await _transition(
+        session_factory, migration_id, MigrationState.ROLLING_BACK,
+        correlation_id=correlation_id, actor=f"operator:{operator}",
+        reason=f"operator aborted at approval gate: {reason}",
+    )
+
+    ctx = await _build_runtime_context(
+        migration_id=migration_id,
+        app_id=app_id,
+        source_topology_id=source_topology_id,
+        target_topology_id=target_topology_id,
+        correlation_id=correlation_id,
+        actor=f"operator:{operator}",
+        session_factory=session_factory,
+        namespace=settings.namespace,
+        listener_port=settings.mq_listener_port,
+    )
+
+    from bcl.rollback import engine as rollback_engine
+    # If the context could not be rebuilt the rollback still must
+    # resolve the migration's terminal state. The rollback engine
+    # tolerates a None client/pods (nothing to undo before the gate).
+    await rollback_engine.execute_rollback(
+        migration_id=migration_id,
+        correlation_id=correlation_id,
+        actor=f"operator:{operator}",
+        session_factory=session_factory,
+        client=ctx.client if ctx else MqClient(default_namespace=settings.namespace),
+        source_qm=ctx.source_qm if ctx else "",
+        source_pod=ctx.source_pod if ctx else "",
+        target_qm=ctx.target_qm if ctx else "",
+        target_pod=ctx.target_pod if ctx else "",
+        namespace=settings.namespace,
+        trigger_reason=f"aborted at approval gate: {reason}",
+    )
+
+
+async def re_plan_at_gate(
+    *,
+    migration_id: int,
+    operator: str,
+    instruction: str,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> dict[str, Any]:
+    """Re-plan a migration parked at the approval gate (the Revise loop).
+
+    Called by POST /migrations/{id}/revise. The operator's free-text
+    instruction is folded into the planner as advisory guidance; the
+    planner re-runs, the Pre-Flight Risk Auditor re-runs on the new
+    plan, and the go/no-go decision score is recomputed. The migration
+    STAYS in AWAITING_APPROVAL — Revise never advances the state
+    machine and never executes MQSC. The operator reviews the revised
+    package and then approves or aborts.
+
+    Every revision is appended to Migration.plan['revision_history'] so
+    the full deliberation is auditable. Returns the new gate package.
+
+    Guardrails:
+      - Only AWAITING_APPROVAL migrations can be revised.
+      - The instruction influences narrative / rationale / risks only.
+        Operational fields (bridge naming, queues_to_redirect) are
+        re-asserted by the planner from the structured input — operator
+        free-text cannot reach the state machine.
+    """
+    settings = get_settings()
+    async with session_factory() as session:
+        m = await _fetch_migration(session, migration_id)
+        if m.state != MigrationState.AWAITING_APPROVAL:
+            raise ValueError(
+                f"migration {migration_id} is in state {m.state.value}; "
+                "only AWAITING_APPROVAL migrations can be revised."
+            )
+        app_id = m.app_id
+        source_topology_id = m.source_topology_id
+        target_topology_id = m.target_topology_id
+        prior_plan_blob = dict(m.plan or {})
+
+    correlation_id = await _correlation_id_for(session_factory, migration_id)
+
+    # Rebuild the planner input, this time carrying the revision text.
+    label_ctx = await _build_runtime_context(
+        migration_id=migration_id,
+        app_id=app_id,
+        source_topology_id=source_topology_id,
+        target_topology_id=target_topology_id,
+        correlation_id=correlation_id,
+        actor=f"operator:{operator}",
+        session_factory=session_factory,
+        namespace=settings.namespace,
+        listener_port=settings.mq_listener_port,
+    )
+    if label_ctx is None:
+        raise ValueError(
+            "could not rebuild planner input for revision "
+            "(topologies/pods unresolvable)."
+        )
+
+    revised_input = label_ctx.planner_input.model_copy(
+        update={"revision_instruction": instruction}
+    )
+
+    plan, planner_audit = await plan_migration(
+        planner_input=revised_input,
+        session_factory=session_factory,
+        correlation_id=correlation_id,
+        actor=f"operator:{operator}",
+    )
+
+    gate_package = await _build_gate_package(
+        app_id=app_id,
+        source_topology_id=source_topology_id,
+        target_topology_id=target_topology_id,
+        plan=plan,
+        namespace=settings.namespace,
+        listener_port=settings.mq_listener_port,
+        session_factory=session_factory,
+        correlation_id=correlation_id,
+        actor=f"operator:{operator}",
+    )
+
+    # Append the prior plan to revision_history, then install the new one.
+    revision_history = list(prior_plan_blob.get("revision_history", []))
+    revision_history.append({
+        "revised_at": datetime.now(UTC).isoformat(),
+        "operator": operator,
+        "instruction": instruction,
+        "superseded_plan": prior_plan_blob.get("plan"),
+        "superseded_go_no_go": prior_plan_blob.get("go_no_go"),
+    })
+
+    async with session_factory() as session:
+        m = await _fetch_migration(session, migration_id)
+        m.plan = {
+            "plan": plan.model_dump(),
+            "planner_audit": planner_audit,
+            "planner_input": revised_input.model_dump(),
+            "risk_brief": gate_package["risk_brief"],
+            "auditor_audit": gate_package["auditor_audit"],
+            "go_no_go": gate_package["go_no_go"],
+            "revision_history": revision_history,
+            "approval": None,
+        }
+        m.version = m.version + 1
+        await write_audit_entry(
+            session,
+            operation=AuditOperation.MIGRATION_PLANNED,
+            success=True,
+            actor=f"operator:{operator}",
+            correlation_id=correlation_id,
+            app_id=app_id,
+            request_payload={
+                "migration_id": migration_id,
+                "revision_number": len(revision_history),
+                "instruction": instruction,
+            },
+            response_payload={
+                "go_no_go": gate_package["go_no_go"]["recommendation"],
+            },
+        )
+        await session.commit()
+
+    logger.info(
+        "migration %s revised (revision %d): go/no-go now %s",
+        migration_id, len(revision_history),
+        gate_package["go_no_go"]["recommendation"],
+    )
+    return {
+        "migration_id": migration_id,
+        "revision_number": len(revision_history),
+        "plan": plan.model_dump(),
+        "risk_brief": gate_package["risk_brief"],
+        "go_no_go": gate_package["go_no_go"],
+    }
+
+
+async def _run_forward_path(ctx: "_MigrationContext") -> None:
+    """Drive the migration's forward state-machine path.
+
+    Extracted from the old _execute_migration so the same handler
+    sequence runs whether the migration is starting fresh after
+    approval or being resumed. On any handler failure, transitions to
+    ROLLING_BACK and delegates to the rollback engine — unchanged
+    behaviour from the pre-gate engine.
+    """
+    migration_id = ctx.migration_id
+    correlation_id = ctx.correlation_id
+    actor = ctx.actor
+    session_factory = ctx.session_factory
+
     forward_steps_succeeded = True
     abort_reason: str | None = None
 
     handlers = [
         (MigrationState.PROVISIONING_TARGET_QM,
             lambda: _do_provisioning_target_qm(
-                target_qm=target_qm, target_ready=target_ready,
+                target_qm=ctx.target_qm, target_ready=ctx.target_ready,
                 migration_id=migration_id,
                 correlation_id=correlation_id, actor=actor,
                 session_factory=session_factory,
             )),
         (MigrationState.VALIDATING_PRE,
             lambda: _do_validating_pre(
-                client=client,
-                source_qm=source_qm, source_pod=source_pod,
-                queues=queues_to_redirect, namespace=namespace,
+                client=ctx.client,
+                source_qm=ctx.source_qm, source_pod=ctx.source_pod,
+                queues=ctx.queues_to_redirect, namespace=ctx.namespace,
                 migration_id=migration_id,
                 correlation_id=correlation_id, actor=actor,
                 session_factory=session_factory,
             )),
         (MigrationState.REWIRING,
             lambda: _do_rewiring(
-                client=client,
-                planner_input=planner_input,
-                source_qm=source_qm, source_pod=source_pod,
-                target_qm=target_qm, target_pod=target_pod,
-                source_flows=source_flows, target_flows=target_flows,
-                namespace=namespace,
+                client=ctx.client,
+                planner_input=ctx.planner_input,
+                source_qm=ctx.source_qm, source_pod=ctx.source_pod,
+                target_qm=ctx.target_qm, target_pod=ctx.target_pod,
+                source_flows=ctx.source_flows, target_flows=ctx.target_flows,
+                namespace=ctx.namespace,
                 migration_id=migration_id,
                 correlation_id=correlation_id, actor=actor,
                 session_factory=session_factory,
             )),
         (MigrationState.DRAIN_WAIT,
             lambda: _do_drain_wait(
-                client=client,
-                source_qm=source_qm, source_pod=source_pod,
-                queues=queues_to_redirect, namespace=namespace,
+                client=ctx.client,
+                source_qm=ctx.source_qm, source_pod=ctx.source_pod,
+                queues=ctx.queues_to_redirect, namespace=ctx.namespace,
                 migration_id=migration_id,
                 correlation_id=correlation_id, actor=actor,
                 session_factory=session_factory,
             )),
         (MigrationState.VALIDATING_DURING,
             lambda: _do_validating_during(
-                client=client,
-                source_qm=source_qm, source_pod=source_pod,
-                target_qm=target_qm, target_pod=target_pod,
-                bridge_xmitq=bridge_xmitq,
-                namespace=namespace,
+                client=ctx.client,
+                source_qm=ctx.source_qm, source_pod=ctx.source_pod,
+                target_qm=ctx.target_qm, target_pod=ctx.target_pod,
+                bridge_xmitq=ctx.bridge_xmitq,
+                namespace=ctx.namespace,
                 migration_id=migration_id,
                 correlation_id=correlation_id, actor=actor,
                 session_factory=session_factory,
             )),
         (MigrationState.DRAINING_SOURCE,
             lambda: _do_draining_source(
-                client=client,
-                source_qm=source_qm, source_pod=source_pod,
-                bridge_xmitq=bridge_xmitq, namespace=namespace,
+                client=ctx.client,
+                source_qm=ctx.source_qm, source_pod=ctx.source_pod,
+                bridge_xmitq=ctx.bridge_xmitq, namespace=ctx.namespace,
                 migration_id=migration_id,
                 correlation_id=correlation_id, actor=actor,
                 session_factory=session_factory,
             )),
         (MigrationState.VALIDATING_POST,
             lambda: _do_validating_post(
-                client=client,
-                source_qm=source_qm, source_pod=source_pod,
-                target_qm=target_qm, target_pod=target_pod,
-                queues=queues_to_redirect,
-                namespace=namespace,
+                client=ctx.client,
+                source_qm=ctx.source_qm, source_pod=ctx.source_pod,
+                target_qm=ctx.target_qm, target_pod=ctx.target_pod,
+                queues=ctx.queues_to_redirect,
+                namespace=ctx.namespace,
                 migration_id=migration_id,
                 correlation_id=correlation_id, actor=actor,
                 session_factory=session_factory,
@@ -433,6 +885,10 @@ async def _execute_migration(
             m.completed_at = datetime.now(UTC)
             await session.commit()
         logger.info("migration %s completed", migration_id)
+        await _run_compliance_narrator(
+            migration_id=migration_id, correlation_id=correlation_id,
+            actor=actor, session_factory=session_factory,
+        )
         return
 
     # ── Rollback path ──────────────────────────────────────────────
@@ -446,21 +902,251 @@ async def _execute_migration(
         reason=abort_reason,
     )
 
-    # Delegate to the rollback engine. Imported lazily to avoid circular
-    # import (rollback.engine imports this module's MigrationStep query
-    # helpers).
     from bcl.rollback import engine as rollback_engine
     await rollback_engine.execute_rollback(
         migration_id=migration_id,
         correlation_id=correlation_id,
         actor=actor,
         session_factory=session_factory,
-        client=client,
-        source_qm=source_qm, source_pod=source_pod,
-        target_qm=target_qm, target_pod=target_pod,
-        namespace=namespace,
+        client=ctx.client,
+        source_qm=ctx.source_qm, source_pod=ctx.source_pod,
+        target_qm=ctx.target_qm, target_pod=ctx.target_pod,
+        namespace=ctx.namespace,
         trigger_reason=abort_reason or "unspecified",
     )
+    await _run_compliance_narrator(
+        migration_id=migration_id, correlation_id=correlation_id,
+        actor=actor, session_factory=session_factory,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Runtime context — rebuilt on resume so the gate can pause/resume
+# ─────────────────────────────────────────────────────────────────────────
+
+
+from dataclasses import dataclass  # noqa: E402  (local to keep diff tight)
+
+
+@dataclass
+class _MigrationContext:
+    """Everything the forward-path handlers need to run.
+
+    Built once at start and rebuilt verbatim on resume after the
+    approval gate. Holding it in one object means `_run_forward_path`
+    is identical whether the migration is fresh or resumed.
+    """
+
+    migration_id: int
+    app_id: str
+    correlation_id: str
+    actor: str
+    session_factory: async_sessionmaker[AsyncSession]
+    namespace: str
+    client: MqClient
+    source_qm: str
+    source_pod: str
+    source_ready: bool
+    target_qm: str
+    target_pod: str
+    target_ready: bool
+    queues_to_redirect: list[str]
+    bridge_xmitq: str
+    planner_input: PlannerInput
+    source_flows: list[FlowSpec]
+    target_flows: list[FlowSpec]
+
+
+async def _build_runtime_context(
+    *,
+    migration_id: int,
+    app_id: str,
+    source_topology_id: int,
+    target_topology_id: int,
+    correlation_id: str,
+    actor: str,
+    session_factory: async_sessionmaker[AsyncSession],
+    namespace: str,
+    listener_port: int,
+) -> _MigrationContext | None:
+    """Reconstruct the forward-path runtime context for a migration.
+
+    Used by resume_migration / abort_at_gate. Reads the source +
+    target topology specs, re-resolves pods, and rebuilds the planner
+    input. Returns None if pods cannot be resolved.
+    """
+    async with session_factory() as session:
+        src = await session.get(Topology, source_topology_id)
+        tgt = await session.get(Topology, target_topology_id)
+        if src is None or tgt is None:
+            return None
+        source_flows = [
+            FlowSpec.model_validate(f) for f in src.spec.get("flows", [])
+        ]
+        target_flows = [
+            FlowSpec.model_validate(f) for f in tgt.spec.get("flows", [])
+        ]
+
+    source_qm = choreography.app_source_qm(
+        app_id=app_id, source_topology_flows=source_flows
+    )
+    target_qm = choreography.app_target_qm(
+        app_id=app_id, target_topology_flows=target_flows
+    )
+    if source_qm is None or target_qm is None:
+        return None
+
+    pods = await _resolve_pods(
+        session_factory,
+        source_topology_id=source_topology_id,
+        target_topology_id=target_topology_id,
+        source_qm=source_qm,
+        target_qm=target_qm,
+    )
+    if pods is None:
+        return None
+    source_pod, source_ready, target_pod, target_ready = pods
+
+    queues = sorted(choreography.app_owns_queues_on_source(
+        app_id=app_id, source_topology_flows=source_flows
+    ))
+    bridge_channel = choreography.bridge_channel_name(source_qm, target_qm)
+    bridge_xmitq = choreography.bridge_xmitq_name(target_qm)
+
+    label = await _app_role_summary(
+        session_factory, app_id=app_id, target_flows=target_flows
+    )
+    planner_input = PlannerInput(
+        app_id=app_id,
+        app_name=label["app_name"],
+        neighbourhood=label["neighbourhood"],
+        source_qm=source_qm,
+        target_qm=target_qm,
+        target_qm_namespace=namespace,
+        target_qm_listener_port=listener_port,
+        bridge_channel_name=bridge_channel,
+        bridge_xmitq_name=bridge_xmitq,
+        queues_to_redirect=queues,
+        target_qm_provisioned=target_ready,
+        source_flow_count=len(source_flows),
+        target_flow_count=len(target_flows),
+        app_role_summary=label["role"],
+    )
+
+    return _MigrationContext(
+        migration_id=migration_id,
+        app_id=app_id,
+        correlation_id=correlation_id,
+        actor=actor,
+        session_factory=session_factory,
+        namespace=namespace,
+        client=MqClient(default_namespace=namespace),
+        source_qm=source_qm,
+        source_pod=source_pod,
+        source_ready=source_ready,
+        target_qm=target_qm,
+        target_pod=target_pod,
+        target_ready=target_ready,
+        queues_to_redirect=queues,
+        bridge_xmitq=bridge_xmitq,
+        planner_input=planner_input,
+        source_flows=source_flows,
+        target_flows=target_flows,
+    )
+
+
+async def _correlation_id_for(
+    session_factory: async_sessionmaker[AsyncSession],
+    migration_id: int,
+) -> str:
+    """Resolve a migration's correlation_id from its MIGRATION_PLANNED
+    audit entry. Every migration writes exactly one such row at start.
+    """
+    async with session_factory() as session:
+        stmt = (
+            select(AuditLog)
+            .where(AuditLog.operation == AuditOperation.MIGRATION_PLANNED)
+            .order_by(AuditLog.lamport_clock.desc())
+        )
+        rows = (await session.execute(stmt)).scalars().all()
+        for r in rows:
+            if (r.request_payload or {}).get("migration_id") == migration_id:
+                return r.correlation_id
+    # Fallback — should not happen; keeps the timeline coherent anyway.
+    return f"mig-{migration_id}-resumed"
+
+
+async def _run_compliance_narrator(
+    *,
+    migration_id: int,
+    correlation_id: str,
+    actor: str,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Invoke the Compliance Narrator agent on a terminal migration.
+
+    Reads the migration's Lamport-ordered audit trail, asks the
+    narrator agent for an evidence-cited Markdown narrative, and
+    persists it on Migration.plan under `compliance_narrative`. The
+    evidence-bundle export reads it from there. Best-effort: a failure
+    here never affects the migration's terminal state.
+    """
+    from bcl.agents.planner import narrate_completion
+
+    try:
+        async with session_factory() as session:
+            m = await _fetch_migration(session, migration_id)
+            summary = {
+                "migration_id": m.id,
+                "app_id": m.app_id,
+                "final_state": m.state.value,
+                "started_at": (
+                    m.started_at.isoformat() if m.started_at else None
+                ),
+                "completed_at": (
+                    m.completed_at.isoformat() if m.completed_at else None
+                ),
+            }
+            excerpt_stmt = (
+                select(AuditLog)
+                .where(AuditLog.correlation_id == correlation_id)
+                .order_by(AuditLog.lamport_clock.asc())
+                .limit(60)
+            )
+            rows = (await session.execute(excerpt_stmt)).scalars().all()
+            excerpt = [
+                {
+                    "lamport_clock": r.lamport_clock,
+                    "operation": r.operation.value,
+                    "success": r.success,
+                    "actor": r.actor,
+                }
+                for r in rows
+            ]
+
+        narrative = await narrate_completion(
+            migration_summary=summary,
+            recent_audit_excerpt=excerpt,
+            session_factory=session_factory,
+            correlation_id=correlation_id,
+            actor=actor,
+        )
+
+        async with session_factory() as session:
+            m = await _fetch_migration(session, migration_id)
+            plan_blob = dict(m.plan or {})
+            plan_blob["compliance_narrative"] = {
+                "markdown": narrative,
+                "generated_at": datetime.now(UTC).isoformat(),
+            }
+            m.plan = plan_blob
+            await session.commit()
+        logger.info("migration %s compliance narrative stored", migration_id)
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "compliance narrator failed for migration %s (non-fatal)",
+            migration_id,
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────
