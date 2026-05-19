@@ -1,2 +1,1 @@
-Invoke-RestMethod "http://localhost:8080/migrations/1/audit" | ConvertTo-Json -Depth 8 | Out-File m1.json
-notepad m1.json
+oc get pods -n roco-dev | Select-String wl6eebdj
