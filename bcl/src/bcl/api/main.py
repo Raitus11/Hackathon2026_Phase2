@@ -10,20 +10,18 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from bcl import __version__
-from bcl.api import (
-    assistant,
-    audit,
-    blast_radius_api,
-    exports,
-    health,
-    rca_api,
-    message_flow,
-    migration,
-    provisioning,
-    reliability_api,
-    statistical_api,
-    topology,
-)
+from bcl.api import assistant
+from bcl.api import audit
+from bcl.api import blast_radius_api
+from bcl.api import exports
+from bcl.api import health
+from bcl.api import message_flow
+from bcl.api import migration
+from bcl.api import provisioning
+from bcl.api import rca_api
+from bcl.api import reliability_api
+from bcl.api import statistical_api
+from bcl.api import topology
 from bcl.audit.lamport import LamportClock
 from bcl.audit.middleware import CorrelationIdMiddleware
 from bcl.config import get_settings
