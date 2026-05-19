@@ -1,9 +1,4 @@
-oc whoami
-oc exec qm-wq22-fcd6945c9-qk6cc -n roco-dev -- bash -c "echo 'DIS QMGR' | runmqsc WQ22"
+Invoke-RestMethod "http://localhost:8080/migrations?app_id=ZN" | ConvertTo-Json -Depth 8 | Out-File zn.json
+notepad zn.json
 
-oc get pods -n roco-dev | Select-String wq31
-oc exec <wq31-pod-name> -n roco-dev -- bash -c "echo 'DIS QMGR' | runmqsc WQ31"
-Invoke-RestMethod "http://localhost:8080/migrations?app_id=ZN" | ConvertTo-Json -Depth 6
-Invoke-RestMethod "http://localhost:8080/migrations/<id>/audit" | ConvertTo-Json -Depth 6
-Invoke-RestMethod "http://localhost:8080/migrations?app_id=RO" | ConvertTo-Json -Depth 6
-Invoke-RestMethod "http://localhost:8080/migrations/<RO-id>/audit" | ConvertTo-Json -Depth 6
+oc exec qm-wq31-596c85678c-l8qzr -n roco-dev -- bash -c "echo 'DIS QUEUE(RO.ZN.WRQN.WQ22.YSRC.XL21)' | runmqsc WQ31"
