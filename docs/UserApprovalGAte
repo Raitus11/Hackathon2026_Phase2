@@ -1,0 +1,1 @@
+oc exec <that-pod-name> -n roco-dev -- bash -c "echo 'DIS QL(*) WHERE(DESCR LK *RO*)' | runmqsc WQ22"
