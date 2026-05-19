@@ -1,1 +1,6 @@
-oc exec qm-wq31-596c85678c-l8qzr -n roco-dev -- bash -c "echo 'DIS QUEUE(RO.ZN.WRQN.TJR1.LCRB.JHI.UOVSFRZ.ZQN01) DIS QUEUE(RO.ZN.WRQN.WQ22.LCRB.JHI.UOVSFRZ.XL21) DIS QUEUE(RO.ZN.WRQN.WQ22.YSRC.XL21)' | runmqsc WQ31"
+oc exec qm-wq31-596c85678c-l8qzr -n roco-dev -- bash -c "echo 'DIS QL(RO.ZN.WRQN.TJR1.LCRB.JHI.UOVSFRZ.ZQN01)' | runmqsc WQ31"
+oc exec qm-wq31-596c85678c-l8qzr -n roco-dev -- bash -c "echo 'DIS QL(RO.ZN.WRQN.WQ22.LCRB.JHI.UOVSFRZ.XL21)' | runmqsc WQ31"
+oc exec qm-wq31-596c85678c-l8qzr -n roco-dev -- bash -c "echo 'DIS QL(RO.ZN.WRQN.WQ22.YSRC.XL21)' | runmqsc WQ31"
+
+$q = "RO.ZN.WRQN.WQ22.YSRC.XL21"
+oc exec qm-wq31-596c85678c-l8qzr -n roco-dev -- bash -c "echo 'DIS QL($q)' | runmqsc WQ31"
