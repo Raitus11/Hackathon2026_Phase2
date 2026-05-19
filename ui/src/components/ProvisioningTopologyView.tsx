@@ -27,12 +27,20 @@ import type { FlowSpec, QueueManager, Topology } from "@/lib/bcl-client";
 // Data shaping
 // ─────────────────────────────────────────────────────────────────────
 
+interface QmObjects {
+  channels: string[]; // distinct channel names touching this QM
+  xmitqs: string[]; // distinct transmission queue names on this QM
+  localQueues: string[]; // distinct app queue names hosted on this QM
+  remoteQueues: string[]; // distinct queue names this QM routes out as QREMOTE
+}
+
 interface QmNode {
   name: string;
   qm: QueueManager | null; // null = referenced by a flow but not a deployed QM row
   flowCount: number;
   deployed: boolean;
   ready: boolean;
+  objects: QmObjects;
 }
 
 interface FlowEdge {
@@ -72,13 +80,50 @@ function buildGraph(topology: Topology): {
     if (f.consumer_queue_manager !== f.producer_queue_manager) {
       bump(f.consumer_queue_manager);
     }
+    // Trust the CSV's flow_type. A Remote flow can still have its
+    // producer and consumer on the same shared QM — that does NOT make
+    // it a local flow. Only flow_type === "Local" is a local flow.
     return {
       from: f.producer_queue_manager,
       to: f.consumer_queue_manager,
       flow: f,
-      isLocal: f.consumer_queue_manager === f.producer_queue_manager,
+      isLocal: f.flow_type === "Local",
     };
   });
+
+  // Per-QM object inventory, derived from the flows. Each Remote flow
+  // implies: a channel + XMITQ on the producer QM, a QREMOTE on the
+  // producer QM, and a QLOCAL on the consumer QM. Local flows imply a
+  // QLOCAL on the single QM. We collect distinct names per QM.
+  const objByQm = new Map<string, QmObjects>();
+  const objFor = (n: string): QmObjects => {
+    let o = objByQm.get(n);
+    if (!o) {
+      o = { channels: [], xmitqs: [], localQueues: [], remoteQueues: [] };
+      objByQm.set(n, o);
+    }
+    return o;
+  };
+  const pushUnique = (arr: string[], v: string | null | undefined) => {
+    if (v && !arr.includes(v)) arr.push(v);
+  };
+  for (const e of edges) {
+    const prod = objFor(e.from);
+    const cons = objFor(e.to);
+    if (e.isLocal) {
+      // Local flow: producer and consumer share one QLOCAL on one QM.
+      pushUnique(prod.localQueues, e.flow.producer_queue_name);
+      pushUnique(prod.localQueues, e.flow.consumer_queue_name);
+    } else {
+      // Remote flow: producer side gets a QREMOTE + XMITQ + channel;
+      // consumer side hosts the real QLOCAL.
+      pushUnique(prod.channels, e.flow.channel_name);
+      pushUnique(prod.xmitqs, e.flow.transmit_queue_name);
+      pushUnique(prod.remoteQueues, e.flow.producer_queue_name);
+      pushUnique(cons.channels, e.flow.channel_name);
+      pushUnique(cons.localQueues, e.flow.consumer_queue_name);
+    }
+  }
 
   // Node set = every deployed QM ∪ every QM named by a flow.
   const names = new Set<string>();
@@ -88,6 +133,13 @@ function buildGraph(topology: Topology): {
     names.add(e.to);
   }
 
+  const emptyObjects = (): QmObjects => ({
+    channels: [],
+    xmitqs: [],
+    localQueues: [],
+    remoteQueues: [],
+  });
+
   const nodes: QmNode[] = [...names].map((name) => {
     const qm = qmByName.get(name) ?? null;
     return {
@@ -96,6 +148,7 @@ function buildGraph(topology: Topology): {
       flowCount: counts.get(name) ?? 0,
       deployed: qm !== null,
       ready: qm?.is_ready ?? false,
+      objects: objByQm.get(name) ?? emptyObjects(),
     };
   });
 
@@ -108,8 +161,8 @@ function buildGraph(topology: Topology): {
 // SVG geometry
 // ─────────────────────────────────────────────────────────────────────
 
-const BOX_W = 188;
-const BOX_H = 52;
+const BOX_W = 208;
+const BOX_H = 66;
 const ROW_GAP = 22;
 const COL_X = 60; // left column (producers / hubs)
 const COL_X2 = 430; // right column (consumers)
@@ -158,6 +211,8 @@ export default function ProvisioningTopologyView({
   const { nodes, edges } = useMemo(() => buildGraph(topology), [topology]);
   const placed = useMemo(() => placeNodes(nodes, edges), [nodes, edges]);
   const [hover, setHover] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [detailed, setDetailed] = useState(false);
 
   const posByName = useMemo(() => {
     const m = new Map<string, Placed>();
@@ -208,11 +263,24 @@ export default function ProvisioningTopologyView({
         <h3 className="text-sm font-semibold tracking-tight">
           Provisioning Topology
         </h3>
-        <span className="text-xs text-fg-muted">
-          {topology.kind === "SOURCE" ? "source" : "target"} ·{" "}
-          {nodes.length} QM{nodes.length === 1 ? "" : "s"} · {edges.length}{" "}
-          flow{edges.length === 1 ? "" : "s"}
-        </span>
+        <div className="flex items-baseline gap-3">
+          <button
+            type="button"
+            onClick={() => setDetailed((d) => !d)}
+            className={`rounded border px-2 py-0.5 text-xs transition-colors ${
+              detailed
+                ? "border-info bg-info/15 text-info"
+                : "border-border-subtle text-fg-muted hover:text-fg"
+            }`}
+          >
+            {detailed ? "✓ Object detail" : "Show object detail"}
+          </button>
+          <span className="text-xs text-fg-muted">
+            {topology.kind === "SOURCE" ? "source" : "target"} ·{" "}
+            {nodes.length} QM{nodes.length === 1 ? "" : "s"} · {edges.length}{" "}
+            flow{edges.length === 1 ? "" : "s"}
+          </span>
+        </div>
       </div>
       <p className="mb-3 text-xs text-fg-muted">
         What was provisioned and how it connects — queue managers and the
@@ -329,6 +397,7 @@ export default function ProvisioningTopologyView({
           {/* QM boxes */}
           {placed.map((p) => {
             const active = nodeActive(p.name);
+            const isSel = selected === p.name;
             const stroke = !p.deployed
               ? "#3a4c5e"
               : p.ready
@@ -342,12 +411,24 @@ export default function ProvisioningTopologyView({
             const selfLoop = edges.some(
               (e) => e.isLocal && e.from === p.name,
             );
+            const o = p.objects;
+            const objSummary = [
+              `${o.channels.length} ch`,
+              `${o.localQueues.length} QL`,
+              o.remoteQueues.length ? `${o.remoteQueues.length} QR` : null,
+              o.xmitqs.length ? `${o.xmitqs.length} XMITQ` : null,
+            ]
+              .filter(Boolean)
+              .join(" · ");
             return (
               <g
                 key={p.name}
                 transform={`translate(${p.x}, ${p.y})`}
                 opacity={active ? 1 : 0.35}
                 onMouseEnter={() => setHover(p.name)}
+                onClick={() =>
+                  setSelected((s) => (s === p.name ? null : p.name))
+                }
                 style={{ cursor: "pointer" }}
               >
                 <rect
@@ -355,34 +436,40 @@ export default function ProvisioningTopologyView({
                   height={BOX_H}
                   rx="7"
                   fill={fill}
-                  stroke={stroke}
-                  strokeWidth={hover === p.name ? 2 : 1.3}
+                  stroke={isSel ? "#4493f8" : stroke}
+                  strokeWidth={isSel || hover === p.name ? 2 : 1.3}
                 />
                 <text
                   x="12"
-                  y="21"
+                  y="20"
                   fill="#e6edf3"
                   fontSize="11.5"
                   fontWeight="600"
                 >
-                  {p.name.length > 22 ? p.name.slice(0, 21) + "…" : p.name}
+                  {p.name.length > 24 ? p.name.slice(0, 23) + "…" : p.name}
                 </text>
-                <text x="12" y="37" fill="#8696a8" fontSize="8.5">
+                <text x="12" y="35" fill="#8696a8" fontSize="8.5">
                   {p.deployed
                     ? p.ready
                       ? "deployed · ready"
                       : "deployed · starting"
                     : "referenced — not a deployed QM"}
                 </text>
-                <text x="12" y="47" fill="#5e6b78" fontSize="7.5">
+                <text x="12" y="48" fill="#5e6b78" fontSize="7.5">
                   {p.flowCount} flow{p.flowCount === 1 ? "" : "s"}
-                  {p.qm ? ` · DLQ ${p.qm.dlq_name}` : ""}
                   {p.qm ? ` · :${p.qm.listener_port}` : ""}
                 </text>
+                {/* object-count line — only in detailed mode */}
+                {detailed && (
+                  <text x="12" y="59" fill="#4d8fd6" fontSize="7.5">
+                    {objSummary}
+                    {p.qm ? ` · DLQ ${p.qm.dlq_name}` : ""}
+                  </text>
+                )}
                 {selfLoop && (
                   <text
                     x={BOX_W - 10}
-                    y="21"
+                    y="20"
                     fill="#7d8a99"
                     fontSize="8"
                     fontWeight="700"
@@ -397,8 +484,70 @@ export default function ProvisioningTopologyView({
         </svg>
       </div>
 
+      {/* click-to-expand object detail for a selected QM */}
+      {selected &&
+        (() => {
+          const node = nodes.find((n) => n.name === selected);
+          if (!node) return null;
+          const o = node.objects;
+          const Section = ({
+            label,
+            items,
+          }: {
+            label: string;
+            items: string[];
+          }) =>
+            items.length === 0 ? null : (
+              <div className="mb-2">
+                <div className="mb-0.5 text-xs font-semibold text-fg-muted">
+                  {label} ({items.length})
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {items.map((it) => (
+                    <span
+                      key={it}
+                      className="rounded bg-bg-subtle px-1.5 py-0.5 font-mono text-[10px] text-fg-subtle"
+                    >
+                      {it}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            );
+          return (
+            <div className="mt-3 rounded-md border border-info/40 bg-info/5 p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <span className="font-mono text-sm font-semibold">
+                  {node.name}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setSelected(null)}
+                  className="text-xs text-fg-muted hover:text-fg"
+                >
+                  ✕ close
+                </button>
+              </div>
+              <Section label="Channels" items={o.channels} />
+              <Section label="Transmission queues" items={o.xmitqs} />
+              <Section label="Remote queue definitions" items={o.remoteQueues} />
+              <Section label="Local queues" items={o.localQueues} />
+              {node.qm && (
+                <div className="mt-1 text-xs text-fg-muted">
+                  Dead-letter queue:{" "}
+                  <span className="font-mono text-fg-subtle">
+                    {node.qm.dlq_name}
+                  </span>{" "}
+                  · listener :{node.qm.listener_port}
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
       <p className="mt-2 text-xs text-fg-muted">
-        Hover a queue manager to isolate the flows that touch it.{" "}
+        Hover a queue manager to isolate the flows that touch it; click one to
+        see its provisioned objects.{" "}
         {hover ? (
           <span className="text-fg-subtle">
             Showing flows for{" "}
