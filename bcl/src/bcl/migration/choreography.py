@@ -366,64 +366,49 @@ def build_rewire_plan(
     )
 
     # ── 5. For each consumer-side queue this app owns, swap QLOCAL
-    #      for QREMOTE pointing at the target ─────────────────────────
+    #      for QREMOTE in a SINGLE runmqsc batch ──────────────────────
+    #
+    # DELETE QLOCAL and DEFINE QREMOTE are emitted as ONE mqsc_text so
+    # the engine pipes both into a single `oc exec runmqsc` (apply_mqsc
+    # already supports multi-command stdin — the realize engine pushes
+    # 111 commands through it the same way). runmqsc processes them
+    # sequentially in-process: the queue name is unresolved only for the
+    # sub-millisecond gap between the two commands *inside* the batch,
+    # not across two separate exec round-trips. This makes the
+    # "single MQSC batch / sub-second cutover" claim true as-built.
+    #
+    # Drain is verified zero-window (CURDEPTH=0, IPPROCS=0, OPPROCS=0
+    # across 3 polls) before this runs, so DELETE removes an empty queue.
     for qname in sorted(queues_to_redirect):
         flow_idx = tuple(sorted(queues_to_redirect[qname]))
-
-        # First DELETE the QLOCAL. The original QLOCAL had a depth at
-        # rewire time; we explicitly DRAIN-WAIT before deletion via the
-        # state machine, so by the time this command runs depth=0
-        # (zero-window verified). If a producer race-condition adds a
-        # message between drain-end and DELETE-QLOCAL, that message is
-        # lost — this is a known edge case the engine handles by an
-        # additional dry-run depth probe immediately before this DELETE.
-
         commands.append(
             MigrationMqscCommand(
-                step_label="delete-source-qlocal",
-                target_qm_pod_for="source",
-                op_kind=AuditOperation.MQSC_DELETE_QLOCAL,
-                object_kind="QLOCAL",
-                object_name=qname,
-                mqsc_text=f"DELETE QLOCAL({_q(qname)})",
-                rationale=(
-                    f"Remove the source-side QLOCAL {qname} now that "
-                    f"the app is hosted on {target_qm}. Drain has "
-                    "been verified zero-window per Little's Law before "
-                    "this point."
-                ),
-                # Rollback recreates the QLOCAL (REPLACE handles the
-                # case where the rollback re-runs after partial recovery).
-                rollback_text=f"DEFINE QLOCAL({_q(qname)}) REPLACE",
-                rollback_op_kind=AuditOperation.MQSC_DEFINE_QLOCAL,
-                related_flow_indices=flow_idx,
-            )
-        )
-
-        # Then DEFINE the QREMOTE in its place. RNAME and RQMNAME point
-        # at the same queue name on the target QM (where realize-mq-
-        # objects already created the QLOCAL).
-        commands.append(
-            MigrationMqscCommand(
-                step_label="define-source-qremote",
+                step_label="rewire-qlocal-as-qremote",
                 target_qm_pod_for="source",
                 op_kind=AuditOperation.MQSC_DEFINE_QREMOTE,
                 object_kind="QREMOTE",
                 object_name=qname,
                 mqsc_text=(
+                    f"DELETE QLOCAL({_q(qname)})\n"
                     f"DEFINE QREMOTE({_q(qname)}) "
                     f"RNAME({_q(qname)}) "
                     f"RQMNAME({_q(target_qm)}) "
                     f"XMITQ({_q(bridge_xmitq)}) REPLACE"
                 ),
                 rationale=(
-                    f"Producers still routing to {source_qm}.{qname} "
-                    f"now have their messages forwarded to "
-                    f"{target_qm}.{qname} via {bridge_xmitq}. "
-                    "Transparent rewiring: no producer/consumer reconfig."
+                    f"Single-batch cutover of {qname} on {source_qm}: "
+                    f"DELETE the drained QLOCAL and DEFINE a QREMOTE in its "
+                    f"place (RNAME/RQMNAME -> {target_qm}, XMITQ "
+                    f"{bridge_xmitq}) in one runmqsc invocation. Producers "
+                    "keep PUTting to the same name; transparent rewiring."
                 ),
-                rollback_text=f"DELETE QREMOTE({_q(qname)})",
-                rollback_op_kind=AuditOperation.MQSC_DELETE_QREMOTE,
+                # Inverse is also one batch, in undo order: drop the
+                # QREMOTE, then restore the original QLOCAL.
+                rollback_text=(
+                    f"DELETE QREMOTE({_q(qname)})\n"
+                    f"DEFINE QLOCAL({_q(qname)}) REPLACE"
+                ),
+                rollback_op_kind=AuditOperation.MQSC_DEFINE_QLOCAL,
                 related_flow_indices=flow_idx,
             )
         )

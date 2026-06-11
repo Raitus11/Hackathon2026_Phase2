@@ -617,4 +617,106 @@ async def get_migration_drain(
     }
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# GET /migrations/{id}/dry-run — preview the exact MQSC, execute nothing
+# ─────────────────────────────────────────────────────────────────────────
+
+
+@router.get(
+    "/{migration_id}/dry-run",
+    summary="Preview the exact MQSC a migration would execute, without running it",
+    description=(
+        "Derives the full rewiring MQSC batch and the read-only pre-flight "
+        "probes for this migration from the choreography builders and "
+        "returns them verbatim. Executes nothing — no MQ calls, no state "
+        "change. The 'weekend scenario' pre-flight: read every command the "
+        "cutover will run before the approval click."
+    ),
+)
+async def dry_run_migration(
+    migration_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> dict[str, Any]:
+    from bcl.config import get_settings
+    from bcl.migration import choreography
+    from bcl.models.api import FlowSpec
+    from bcl.models.orm import Topology
+
+    m = await session.get(Migration, migration_id)
+    if m is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"migration {migration_id} not found",
+        )
+
+    src = await session.get(Topology, m.source_topology_id)
+    tgt = await session.get(Topology, m.target_topology_id)
+    if src is None or tgt is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="source or target topology missing",
+        )
+
+    source_flows = [FlowSpec.model_validate(f) for f in src.spec.get("flows", [])]
+    target_flows = [FlowSpec.model_validate(f) for f in tgt.spec.get("flows", [])]
+
+    source_qm = choreography.app_source_qm(
+        app_id=m.app_id, source_topology_flows=source_flows
+    )
+    target_qm = choreography.app_target_qm(
+        app_id=m.app_id, target_topology_flows=target_flows
+    )
+    if source_qm is None or target_qm is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"could not resolve source/target QM for app {m.app_id}",
+        )
+
+    app_source_queues = sorted(choreography.app_owns_queues_on_source(
+        app_id=m.app_id, source_topology_flows=source_flows
+    ))
+
+    settings = get_settings()
+    rewire = choreography.build_rewire_plan(
+        app_id=m.app_id,
+        source_qm=source_qm,
+        target_qm=target_qm,
+        target_qm_namespace=settings.namespace,
+        target_qm_listener_port=settings.mq_listener_port,
+        flows=target_flows,
+    )
+    probes = choreography.build_pre_validation_probes(
+        source_qm=source_qm,
+        app_source_queues=app_source_queues,
+    )
+
+    def _render(cmd: Any) -> dict[str, Any]:
+        return {
+            "step_label": cmd.step_label,
+            "runs_on": cmd.target_qm_pod_for,
+            "qm": source_qm if cmd.target_qm_pod_for == "source" else target_qm,
+            "object": f"{cmd.object_kind}({cmd.object_name})",
+            "mqsc_text": cmd.mqsc_text,
+            "rationale": cmd.rationale,
+            "rollback_text": cmd.rollback_text,
+        }
+
+    return {
+        "migration_id": migration_id,
+        "app_id": m.app_id,
+        "state": m.state.value,
+        "executed": False,
+        "source_qm": source_qm,
+        "target_qm": target_qm,
+        "pre_flight_probes": [_render(c) for c in probes],
+        "rewire_batch": [_render(c) for c in rewire],
+        "queue_count": len([c for c in rewire if c.object_kind == "QREMOTE"]),
+        "note": (
+            "Read-only preview. No MQSC executed. Each rewire QREMOTE entry "
+            "is one runmqsc batch (DELETE QLOCAL + DEFINE QREMOTE) executed "
+            "in a single oc-exec at migration time."
+        ),
+    }
+
+
 __all__ = ["router"]
