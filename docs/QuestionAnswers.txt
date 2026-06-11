@@ -1,0 +1,14 @@
+"When are the channels created — provisioning or migration?"
+Both, but they're different channels at different times, and the split is exactly the Phase 1 / Phase 2 line. This is a gift of a question given their email structure.
+There are three channel populations:
+
+The target environment's own channel mesh — SDR/RCVR/XMITQ/QREMOTE among the 7 dedicated target QMs, for the 45 target Remote flows. Created during provisioning → realize-mq-objects = Phase 1 staging. derive_mqsc_for_topology only emits MQSC for the QMs in the topology it's given; realizing the target topology never references a source QM. So the net-new environment stands up its full internal messaging fabric and sits idle, with zero writes against heritage.
+The heritage QMs' existing channels — untouched during Phase 1. This is the provable half of their "no disruption to existing heritage systems" requirement: the audit log shows zero MQSC against any source QM during realize. Surface that filter live.
+The source↔target bridge — the bridge XMITQ + SDR on the source heritage QM and the matching RCVR on the target. Created during migration → REWIRING = Phase 2 cutover. This is the only moment in the entire flow that a heritage QM is written to, and it's gated behind the approval click. That's precisely their Phase 2 item "reconfigure heritage components where required."
+
+So channel-creation timing is the Phase 1/Phase 2 boundary: channels that live entirely in the new estate are staged in Phase 1; the bridge that splices new into heritage is built at cutover in Phase 2, and only then.
+Cold answer for the armory (two sentences):
+
+"Two channel sets, two phases. The target environment's internal channel mesh is built during provisioning — Phase 1 staging, touching only net-new queue managers — while the source-to-target bridge channels are created during the migration's rewiring step, which is the single point we reconfigure a heritage QM, and it's gated behind the human approval click."
+
+One honesty note so a veteran can't catch you over-tidying it: the bridge's receiver leg lands on the target QM and is also created at migration time. So it's not "all target channels in Phase 1" — it's "the target's internal mesh is Phase 1; the bridge, both legs, is Phase 2." State it that way and it's airtight.
