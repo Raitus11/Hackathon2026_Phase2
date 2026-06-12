@@ -42,3 +42,10 @@ Two things to have ready for the inevitable follow-ups (two sentences each, as y
 "Is the drain consumer yours or the app's?" — "The application's own consumer drains the queue; we don't inject anything — we only observe depth and the IPPROCS/OPPROCS handle counts until the zero-window condition holds, then remove the now-empty source queue."
 
 You're in strong shape. HMR/QX gives you a 4-queue, real-looking break-glass, and this explanation ties every claim to a panel you can point at.
+
+
+The XMITQ has to be local — it's the local staging point on the source side. If it were remote there'd be nowhere to stage. That's standard distributed-queuing: QREMOTE → XMITQ (local) → SDR channel → RCVR → target QLOCAL.
+If a judge asks "why is your bridge queue local?" the answer is one line: "That's the transmission queue — USAGE(XMITQ) — it's the local staging queue the sender channel drains; the channel is what crosses to the remote QM." Point at the SDR's XMITQ(APPQM_HMR_QX.XMIT) field in image 1 — it names that exact local queue as its transmission queue. That linkage is the bridge.
+
+
+
