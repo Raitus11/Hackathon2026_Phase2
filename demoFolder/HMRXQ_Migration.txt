@@ -1,0 +1,44 @@
+How the migration works — HMR/QX (Migration #3)
+What we're doing: moving app HMR/QX off the shared heritage QM WL6ES3C onto its own dedicated QM APPQM_HMR_QX — with the app never stopped and zero messages lost. Show the state machine (image 5): plan → gate → prov → v.pre → rewire → drain → v.during → drain-src → v.post, all green.
+The key idea: the application talks to a queue name, never to a queue manager directly. We change what that name points to underneath it. The app's connection string and queue name stay bit-identical.
+"Do you stop the app during migration?"
+No. The app is never stopped. That's the whole point. Producers keep PUTting and consumers keep GETting on the same queue names throughout. Walk them through the 9 steps (image 3) — notice the order:
+
+define-bridge-xmitq (source) — build a transmission queue APPQM_HMR_QX.XMIT on the heritage QM.
+define-bridge-rcvr (target) — receiver channel on the new QM.
+define-bridge-sdr (source) — sender channel WL6ES3C.APPQM_.7792.
+start-bridge-sdr (source) — bring the bridge up.
+
+Steps 0–3 build a live message bridge from heritage to the new QM first, while the app runs untouched. Nothing about the app's path has changed yet — we've just laid a new road next to the old one.
+5–8. rewire-qlocal-as-qremote — for each of HMR/QX's 4 queues, in one atomic MQSC batch per queue: DELETE QLOCAL(...) DEFINE QREMOTE(...). The local queue becomes a remote pointer to the new QM. Same name. The producer that was writing to a local queue is now, transparently, writing to a queue that forwards over the bridge to the dedicated QM. No app reconfiguration, no restart.
+Point at step 4's MQSC in image 3: DELETE QLOCAL('RO.HMR.LCKD.XR21') DEFINE QREMOTE('RO.HMR.LCKD.XR2...') — that's the cutover, expressed as one batch so there's no window where the name doesn't exist.
+"If the app isn't stopped, how do you drain? Are messages lost?"
+No messages are lost. We drain to provably empty before removing anything. This is the Drain — Little's Law panel (image 4). Show it — this is your strongest answer.
+Before we delete the old source-side queue, the engine waits until every in-flight message already sitting on it has been consumed. We prove "empty" with a zero-window condition: depth = 0 AND IPPROCS = 0 AND OPPROCS = 0, held across 3 consecutive polls (image 4 panel header states exactly this). Meaning: no messages waiting, no process putting, no process getting — three times in a row, so it's not a momentary dip.
+In image 4 every queue shows drained, L₀ = 0, T_drain = 0s. That's the engine confirming the heritage queue is genuinely empty before the source-side QLOCAL is removed. Sequence matters:
+
+New messages arriving during migration land on the QREMOTE → flow over the bridge → arrive on the dedicated QM. (Validated: v.during green in the state machine.)
+Messages that were already on the old local queue are drained by the live consumer until depth hits zero.
+Only after drain is confirmed does the old source-side queue get cleaned up.
+Final check v.post (green) confirms end-to-end delivery on the new path.
+
+So at no instant is there a queue that messages can fall into and not come out of. Old messages drain out the bottom; new messages route over the bridge; the name never disappears.
+"How do I know nothing was lost — show me."
+Three proofs, all on screen:
+
+The cutover is one atomic batch (image 3, steps 5–8): DELETE+DEFINE per queue in a single MQSC command — the queue name is continuously resolvable.
+Drain is verified, not assumed (image 4): zero-window condition, 3 polls, every queue drained, L₀=0.
+End-to-end delivery proven — target-screen test message: producer RO → consumer HMR/QX, payload matched on the dedicated QM. (Show this live or from the test-message panel.)
+Every step is audited in causal order (images 1, 2): the full Lamport timeline, correlation_id mig-3-490f86c5, 44 rows, MIGRATION_PLANNED → AGENT_INVOCATION → PREFLIGHT_RISK_BRIEF → AWAITING_APPROVAL → APPROVED → steps on APPQM_HMR_QX and WL6ES3C → VALIDATION_RUN → COMPLETED, every row green-ticked. Nothing happens that isn't recorded.
+
+One-line summary for the judges
+
+"We never stop the app. We build a live bridge to the new queue manager first, then atomically repoint each queue name from local to a remote pointer — same name, no reconfig. Messages already in flight are drained to a proven-empty state (depth=0, no readers, no writers, three polls running) before we remove anything; new messages route over the bridge the whole time. Little's Law gives us the drain guarantee, the zero-window condition gives us the proof, and every step is Lamport-ordered in the audit log."
+
+
+Two things to have ready for the inevitable follow-ups (two sentences each, as you like them):
+
+"What if a message arrives in the split-second during the DELETE/DEFINE?" — "The DELETE and DEFINE are submitted as a single MQSC batch to runmqsc, so the name is never absent between them; if the DEFINE half were to fail, the engine transitions to ROLLING_BACK and walks the captured inverse, restoring the original QLOCAL." (Image 5 state-machine note states exactly this: "On any failure, the engine transitions to ROLLING_BACK and walks MigrationStep.rollback_payload in reverse Lamport order.")
+"Is the drain consumer yours or the app's?" — "The application's own consumer drains the queue; we don't inject anything — we only observe depth and the IPPROCS/OPPROCS handle counts until the zero-window condition holds, then remove the now-empty source queue."
+
+You're in strong shape. HMR/QX gives you a 4-queue, real-looking break-glass, and this explanation ties every claim to a panel you can point at.
