@@ -1450,6 +1450,13 @@ def _is_idempotent_ok(result: Any) -> bool:
                 the QLOCAL is already gone; a prior migration replaced
                 it with a QREMOTE pointing at the target. Desired
                 post-state is already achieved.)
+
+    Since the rewire cutover is a multi-command batch (DELETE QLOCAL +
+    DEFINE QREMOTE in one runmqsc invocation), the verdict must cover
+    EVERY command in the batch: each one must either have succeeded
+    (severity 'I') or carry an idempotent-OK code. Judging only the
+    first command would let a benign AMQ8147 on the DELETE mask a
+    genuinely failed DEFINE behind it.
     """
     ok = frozenset({
         "AMQ8350E", "AMQ8013E", "AMQ8348E",
@@ -1459,8 +1466,10 @@ def _is_idempotent_ok(result: Any) -> bool:
     })
     if not result.per_command:
         return False
-    first = result.per_command[0].amq_code
-    return first in ok
+    return all(
+        c.severity == "I" or c.amq_code in ok
+        for c in result.per_command
+    )
 
 
 async def _do_drain_wait(

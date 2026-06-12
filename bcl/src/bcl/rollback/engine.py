@@ -101,17 +101,42 @@ async def execute_rollback(
         )
         await session.commit()
 
-    # Fetch all completed forward steps in REVERSE step_index order.
+    # Fetch forward steps in REVERSE step_index order.
+    #
+    # Which steps get their inverse executed:
+    #   - succeeded == True: always (the forward command took effect).
+    #   - succeeded in (False, None) AND step_label ==
+    #     'rewire-qlocal-as-qremote': ALSO inverted. This step is a
+    #     two-command batch (DELETE QLOCAL + DEFINE QREMOTE); a partial
+    #     failure or a crash mid-batch can leave the DELETE applied with
+    #     no QREMOTE in its place. Its inverse (DELETE QREMOTE + DEFINE
+    #     QLOCAL REPLACE) is idempotent-safe to run regardless of how far
+    #     the forward batch got: DELETE on an absent object is AMQ8147
+    #     (treated success) and DEFINE ... REPLACE is always safe. Running
+    #     it unconditionally restores the source QLOCAL — closing the
+    #     partial-batch window.
+    #   - any other failed/pending step: SKIPPED. Those are single-command
+    #     steps; if the forward command failed, nothing was created, so
+    #     there is nothing to invert — and its inverse may target a pod
+    #     that is the very reason the forward step failed (e.g. a dead
+    #     target QM), which would turn a clean rollback into
+    #     ROLLBACK_FAILED for no benefit.
     async with session_factory() as session:
         stmt = (
             select(MigrationStep)
             .where(
                 MigrationStep.migration_id == migration_id,
-                MigrationStep.succeeded.is_(True),
             )
             .order_by(MigrationStep.step_index.desc())
         )
-        steps = list((await session.execute(stmt)).scalars().all())
+        all_steps = list((await session.execute(stmt)).scalars().all())
+        steps = [
+            s for s in all_steps
+            if s.succeeded is True
+            or (
+                (s.payload or {}).get("step_label") == "rewire-qlocal-as-qremote"
+            )
+        ]
         # Snapshot the data we need; we don't want to hold the session
         # across the rollback loop.
         step_records = [
@@ -285,11 +310,20 @@ async def execute_rollback(
 
 
 def _is_idempotent_inverse_ok(result: Any) -> bool:
-    """Treat 'object already absent' AMQ codes as inverse-success."""
+    """Treat 'object already absent' AMQ codes as inverse-success.
+
+    Inverse payloads can be multi-command batches (e.g. DELETE QREMOTE +
+    DEFINE QLOCAL REPLACE for the cutover step), so the verdict covers
+    EVERY command: each must have succeeded (severity 'I') or carry an
+    idempotent-OK code. Judging only the first command would let a benign
+    AMQ8147 on the DELETE mask a failed QLOCAL restore behind it.
+    """
     if not result.per_command:
         return False
-    first = result.per_command[0].amq_code
-    return first in _INVERSE_IDEMPOTENT_AMQ
+    return all(
+        c.severity == "I" or c.amq_code in _INVERSE_IDEMPOTENT_AMQ
+        for c in result.per_command
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────
