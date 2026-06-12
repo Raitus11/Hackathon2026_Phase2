@@ -1,0 +1,29 @@
+$ns="roco-dev"
+
+AFTER MIGRAATION
+
+
+# The redirected app queues — now QREMOTE pointing at the dedicated QM
+oc exec -n $ns deployment/qm-wl6es3c -- bash -c "echo 'DISPLAY QUEUE(RO.HMR.*) TYPE' | runmqsc WL6ES3C"
+oc exec -n $ns deployment/qm-wl6es3c -- bash -c "echo 'DISPLAY QUEUE(RO.QX.*) TYPE' | runmqsc WL6ES3C"
+
+# The bridge that carries them to the new QM — exists
+oc exec -n $ns deployment/qm-wl6es3c -- bash -c "echo 'DISPLAY QLOCAL(APPQM_HMR_QX.XMIT)' | runmqsc WL6ES3C"
+oc exec -n $ns deployment/qm-wl6es3c -- bash -c "echo 'DISPLAY CHANNEL(WL6ES3C.APPQM_.7792)' | runmqsc WL6ES3C"
+
+
+AFTER ROLLBACK
+
+# Same app queues — back to QLOCAL
+oc exec -n $ns deployment/qm-wl6es3c -- bash -c "echo 'DISPLAY QUEUE(RO.HMR.*) TYPE' | runmqsc WL6ES3C"
+oc exec -n $ns deployment/qm-wl6es3c -- bash -c "echo 'DISPLAY QUEUE(RO.QX.*) TYPE' | runmqsc WL6ES3C"
+
+# The bridge — gone
+oc exec -n $ns deployment/qm-wl6es3c -- bash -c "echo 'DISPLAY QLOCAL(APPQM_HMR_QX.XMIT)' | runmqsc WL6ES3C"
+oc exec -n $ns deployment/qm-wl6es3c -- bash -c "echo 'DISPLAY CHANNEL(WL6ES3C.APPQM_.7792)' | runmqsc WL6ES3C"
+
+
+
+
+The contrast that lands it:
+Block A (migrated)Block B (rolled back)RO.HMR.* / RO.QX.*TYPE(QREMOTE)TYPE(QLOCAL)APPQM_HMR_QX.XMITexistsAMQ8147E not foundWL6ES3C.APPQM_.7792existsAMQ8147E not found
