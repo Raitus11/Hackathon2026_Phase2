@@ -1,0 +1,16 @@
+$ns="roco-dev"
+
+# 1. Original LOCAL queue is BACK
+oc exec -n $ns deployment/qm-wq22 -- bash -c "echo 'DISPLAY QLOCAL(RO.TH.WRQN.WQ22.HLN.YSRC.XL21) TYPE CURDEPTH' | runmqsc WQ22"
+
+# 2. Remote definition GONE
+oc exec -n $ns deployment/qm-wq22 -- bash -c "echo 'DISPLAY QREMOTE(RO.TH.WRQN.WQ22.HLN.YSRC.XL21)' | runmqsc WQ22"
+
+# 3. Bridge XMITQ GONE from heritage
+oc exec -n $ns deployment/qm-wq22 -- bash -c "echo 'DISPLAY QLOCAL(APPQM_LDCWH_TH.XMIT)' | runmqsc WQ22"
+
+# 4. Bridge sender GONE from heritage
+oc exec -n $ns deployment/qm-wq22 -- bash -c "echo 'DISPLAY CHANNEL(WQ22.APPQM_.994F)' | runmqsc WQ22"
+
+# 5. Bridge receiver GONE from target
+oc exec -n $ns deployment/qm-appqm-ldcwh-th -- bash -c "echo 'DISPLAY CHANNEL(WQ22.APPQM_.994F)' | runmqsc APPQM_LDCWH_TH"
