@@ -8,3 +8,6 @@ $pod   # check it printed something like pod/qm-appqm-ldcwh-th-xxxx
 
 # then delete it
 oc delete $pod -n roco-dev
+
+
+oc exec -n roco-dev deployment/qm-wq22 -- bash -c "echo 'DISPLAY QLOCAL(RO.TH.WRQN.WQ22.HLN.YSRC.XL21) TYPE' | runmqsc WQ22"
