@@ -1,0 +1,2 @@
+oc exec -n $ns deployment/qm-wq22 -- bash -c "echo 'DISPLAY QLOCAL(RO.TH.WRQN.WQ22.HLN.YSRC.XL21) TYPE' | runmqsc WQ22"
+# want TYPE(QLOCAL)
