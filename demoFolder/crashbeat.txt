@@ -18,3 +18,4 @@ Complex:
 failed to send message post killing pod
 
 oc exec -n roco-dev deployment/qm-wq22 -- bash -c "echo 'DISPLAY QLOCAL(APPQM_LDCWH_TH.XMIT) CURDEPTH' | runmqsc WQ22"
+oc exec -n roco-dev deployment/qm-wq22 -- bash -c "echo 'DISPLAY QUEUE(RO.TH.WRQN.WQ22.HLN.YSRC.XL21) TYPE' | runmqsc WQ22"
