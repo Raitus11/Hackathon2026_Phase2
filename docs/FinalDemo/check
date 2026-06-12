@@ -1,0 +1,2 @@
+$ns="roco-dev"
+oc exec -n $ns deployment/qm-wq31 -- bash -c "echo 'DISPLAY QUEUE(RO.ZN.*) TYPE' | runmqsc WQ31"
