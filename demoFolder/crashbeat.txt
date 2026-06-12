@@ -2,4 +2,9 @@ oc exec -n $ns deployment/qm-wq22 -- bash -c "echo 'DISPLAY QLOCAL(RO.TH.WRQN.WQ
 # want TYPE(QLOCAL)
 
 
-oc delete pod -n roco-dev (oc get pods -n roco-dev -o name | Select-String "qm-appqm-ldcwh-th")
+# get the exact pod name first
+$pod = (oc get pods -n roco-dev -o name | Select-String "qm-appqm-ldcwh-th").ToString().Trim()
+$pod   # check it printed something like pod/qm-appqm-ldcwh-th-xxxx
+
+# then delete it
+oc delete $pod -n roco-dev
