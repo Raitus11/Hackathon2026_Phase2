@@ -1,0 +1,12 @@
+FIRST HACKATHON — IntelliAI
+
+Problem: Wells Fargo’s IBM MQ estate had grown into tangled topologies — apps sharing queue managers, inconsistent naming, and structural single points of failure — making modernization across 400+ applications slow, risky, and impossible to validate by hand.
+
+IntelliAI modernizes complex MQ topologies by separating correctness from judgment. Correctness is enforced deterministically through hard constraints — one app to one queue manager, fixed naming, canonical routing — rejecting any violating target state. Judgment is context-driven: using metadata like PCI classification, payment criticality, and hosting type, it recommends security-zone isolation, flags single points of failure, and suggests bridge-app relocations to reduce blast radius. Built as a hybrid of a deterministic rules engine and a 10-agent Gemini 2.5 Pro pipeline (via Tachyon), it produces auditable, production-ready outputs: provisioning artifacts, a phased migration plan with rollback, and optimization evidence scored on a weighted 6-factor model
+
+
+.SECOND HACKATHON — IntelliAI 2.0
+
+Problem: Recommending a target topology is only half the job — executing MQ migrations in production risked message loss, downtime, and incomplete audit trails. Teams needed to move live apps off shared queue managers with zero loss and full regulatory-grade evidence.
+
+IntelliAI 2.0 executes IBM MQ migrations end to end, moving production apps onto dedicated queue managers with no message loss, zero reconfiguration, and a complete audit trail. A deterministic Business Control Layer acts as MQ’s single point of contact, driving each app through a Lamport-ordered state machine — provision, channels up, transparent rewiring, drain, validate, complete — with every destructive action human-gated and any failure rolled back per app, never touching a neighbor. Above it, a five-agent Gemini 2.5 Pro pipeline handles planning, pre-flight gating, RCA, and compliance narration. Proven live on real OpenShift across seven reusable apps, each migration emits a downloadable evidence bundle: side-by-side topology comparison, an animated state-machine diagram, a one-click proof of transparent rewiring, and an operator assistant chatbot
