@@ -1,0 +1,731 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IntelliAI 2.0 — Migration Control Plane Walkthrough</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Serif:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#FBF8F2; --bg-raise:#FFFFFF; --panel:#F4EDE3;
+  --ink:#241A14; --ink-dim:#6E6058; --ink-faint:#9C8D82;
+  --red:#D71E28; --red-deep:#A3151E; --gold:#FFCD41; --gold-dim:#A87B00;
+  --pass:#1E7B3C; --fail:#C62828; --amber:#C08A00; --line:#E7DCC9;
+  --mono:'IBM Plex Mono',ui-monospace,monospace;
+  --sans:'IBM Plex Sans',system-ui,sans-serif;
+  --serif:'IBM Plex Serif',Georgia,serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--ink);font-family:var(--sans)}
+body{font-size:clamp(14px,1.15vw,18px);line-height:1.5}
+#deck{position:relative;width:100%;height:100%}
+.scene{position:absolute;inset:0;padding:4.5vh 6vw;display:flex;flex-direction:column;justify-content:safe center;overflow-y:auto;overflow-x:hidden;
+  opacity:0;transform:translateX(40px);pointer-events:none;transition:opacity .45s ease,transform .45s ease}
+.scene.active{opacity:1;transform:translateX(0);pointer-events:auto}
+.scene.past{transform:translateX(-40px)}
+.eyebrow{font-family:var(--mono);font-size:.72em;letter-spacing:.22em;text-transform:uppercase;color:var(--red);margin-bottom:1em}
+h1{font-family:var(--serif);font-weight:700;font-size:clamp(2.6rem,5.4vw,4.6rem);line-height:1.04;letter-spacing:-.01em}
+h2{font-family:var(--serif);font-weight:600;font-size:clamp(1.7rem,3.2vw,2.7rem);line-height:1.1;margin-bottom:.5em}
+.sub{color:var(--ink-dim);max-width:56ch;margin-top:.9em}
+.k{font-family:var(--mono);color:var(--red)}
+.small{font-size:.82em;color:var(--ink-faint)}
+#rail{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);display:flex;gap:9px;z-index:50}
+#rail button{width:9px;height:9px;border-radius:50%;border:1px solid var(--gold-dim);background:transparent;cursor:pointer;padding:0;transition:all .25s}
+#rail button.on{background:var(--red);border-color:var(--red);transform:scale(1.25)}
+#hint{position:fixed;bottom:18px;right:26px;font-family:var(--mono);font-size:.68rem;color:var(--ink-faint);z-index:50}
+#scenetag{position:fixed;top:20px;right:26px;font-family:var(--mono);font-size:.68rem;color:var(--ink-faint);z-index:50}
+#brand{position:fixed;top:20px;left:26px;font-family:var(--mono);font-size:.68rem;color:var(--ink-faint);letter-spacing:.15em;z-index:50}
+#brand b{color:var(--red);font-weight:500}
+body.onhero #brand,body.onhero #hint,body.onhero #scenetag{color:#F3D9A0}
+body.onhero #brand b{color:var(--gold)}
+body.onhero #rail button{border-color:rgba(255,205,65,.75)}
+body.onhero #rail button.on{background:var(--gold);border-color:var(--gold)}
+.stagger>*{opacity:0;transform:translateY(16px);transition:opacity .55s ease,transform .55s ease}
+.scene.in .stagger>*{opacity:1;transform:none}
+.stagger>*:nth-child(1){transition-delay:.05s}.stagger>*:nth-child(2){transition-delay:.11s}
+.stagger>*:nth-child(3){transition-delay:.17s}.stagger>*:nth-child(4){transition-delay:.23s}
+.stagger>*:nth-child(5){transition-delay:.29s}.stagger>*:nth-child(6){transition-delay:.35s}
+.stagger>*:nth-child(7){transition-delay:.41s}.stagger>*:nth-child(8){transition-delay:.47s}
+.stagger>*:nth-child(9){transition-delay:.53s}.stagger>*:nth-child(10){transition-delay:.58s}
+.stagger>*:nth-child(11){transition-delay:.63s}.stagger>*:nth-child(12){transition-delay:.68s}
+
+/* hero */
+#hero{background:radial-gradient(130% 130% at 18% 8%,#C81E28 0%,#951419 55%,#701014 100%)}
+#hero h1,#hero .sub{color:#FFF8EC}
+#hero .eyebrow{color:var(--gold)}
+#heroCanvas{position:absolute;inset:0;z-index:0}
+#hero .fg{position:relative;z-index:2;max-width:60vw}
+#hero .stats{display:flex;gap:14px;margin-top:3em;flex-wrap:wrap}
+.statchip{border:1px solid rgba(255,205,65,.55);background:rgba(255,255,255,.10);backdrop-filter:blur(3px);border-radius:10px;padding:.9em 1.4em;min-width:9.5em}
+.statchip .n{font-family:var(--serif);font-size:1.9em;color:var(--gold);font-weight:600;line-height:1.1}
+.statchip .l{font-family:var(--mono);font-size:.66em;letter-spacing:.12em;text-transform:uppercase;color:#F3D9A0;margin-top:.4em}
+#lossTag{position:absolute;z-index:2;right:6vw;bottom:11vh;font-family:var(--mono);font-size:.74rem;color:rgba(255,240,214,.8)}
+#lossTag b{color:var(--gold);font-size:1.15em}
+
+/* problem cards */
+.grid2x2{display:grid;grid-template-columns:1fr 1fr;gap:1.1em;margin-top:1.5em}
+.pcard{border:1px solid var(--line);background:#fff;border-radius:13px;padding:1.35em 1.5em;position:relative;box-shadow:0 2px 12px rgba(96,48,16,.06)}
+.pcard::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--red);border-radius:3px 0 0 3px}
+.pcard h3{font-family:var(--serif);font-size:1.18em;margin-bottom:.35em;color:var(--red)}
+.pcard p{font-size:.88em;color:var(--ink-dim)}
+.pcard p b{color:var(--ink)}
+
+/* architecture stack */
+.stack{display:flex;flex-direction:column;gap:.6em;margin-top:1.5em;max-width:62vw;position:relative}
+.tier{border-radius:13px;padding:1.15em 1.5em;color:#fff;box-shadow:0 3px 14px rgba(120,20,20,.18)}
+.tier h3{font-family:var(--serif);font-size:1.2em;margin-bottom:.2em}
+.tier p{font-size:.84em;opacity:.92}
+.tier.ui{background:#C22026}
+.tier.bcl{background:#8F1418;border:1px solid var(--gold)}
+.tier.mq{background:#C22026}
+.downarrow{text-align:center;color:var(--red);font-size:1em;line-height:.6;margin:-2px 0}
+#noPath{position:absolute;right:-11.5em;top:12%;bottom:12%;width:10.5em;pointer-events:none;opacity:0;transition:opacity .5s}
+#noPath.show{opacity:1}
+#noPath .npline{position:absolute;left:1.2em;top:0;bottom:0;border-left:2px dashed var(--fail)}
+#noPath .nplbl{position:absolute;left:2.2em;top:42%;font-family:var(--mono);font-size:.66em;color:var(--fail);line-height:1.6}
+.chokefact{margin-top:1.3em;border:1px solid var(--line);border-radius:11px;background:var(--panel);padding:.9em 1.2em;font-size:.85em;color:var(--ink-dim);max-width:62vw}
+.chokefact b{color:var(--red)}
+
+/* five-step migration */
+.steps{display:flex;gap:.55em;margin-top:1.4em;flex-wrap:wrap;align-items:center}
+.stp{border:1px solid var(--line);background:#fff;border-radius:9px;padding:.6em .95em;font-family:var(--mono);font-size:.74em;color:var(--ink-dim);transition:all .3s;box-shadow:0 2px 8px rgba(96,48,16,.05)}
+.stp.lit{border-color:var(--red);color:var(--red);background:#FDECEA;box-shadow:0 0 12px rgba(215,30,40,.2)}
+.stp.done{border-color:var(--pass);color:var(--pass)}
+.sarrow{color:var(--ink-faint);font-size:.8em}
+#flowviz{margin-top:1.6em;border:1px solid var(--line);border-radius:14px;background:#fff;padding:1.6em 1.8em;box-shadow:0 2px 12px rgba(96,48,16,.06);position:relative;max-width:70vw}
+.fvrow{display:flex;align-items:center;gap:1em;font-family:var(--mono);font-size:.74em}
+.fvnode{border:1.5px solid var(--ink-dim);border-radius:10px;padding:.8em 1.1em;text-align:center;transition:all .45s;background:#fff;white-space:nowrap}
+.fvnode small{display:block;font-family:var(--sans);color:var(--ink-faint);font-size:.8em;margin-top:.25em}
+.fvnode.app{border-color:var(--red);color:var(--red);font-weight:600}
+.fvnode.tgt{opacity:.18;border-style:dashed}
+.fvnode.tgt.up{opacity:1;border-style:solid;border-color:var(--pass);color:var(--pass)}
+.fvnode.src.fade{opacity:.3}
+#qlabel{transition:all .4s;border-color:var(--ink-dim)}
+#qlabel.alias{border-color:var(--gold-dim);background:#FFF7E0;color:#8A6400}
+.fvlink{flex:0 0 3.2em;height:2px;background:var(--ink-dim);position:relative;transition:background .4s}
+.fvlink.bridge{flex:0 0 4.6em;background:transparent;border-top:2px dashed var(--line)}
+.fvlink.bridge.up{border-top:2px solid var(--pass)}
+.fvlink .mdot{position:absolute;top:-3.5px;left:0;width:8px;height:8px;border-radius:50%;background:var(--gold);box-shadow:0 0 6px rgba(228,167,0,.7);opacity:0}
+#depthbox{margin-top:1.3em;display:flex;gap:2em;align-items:center;font-family:var(--mono);font-size:.76em;color:var(--ink-dim)}
+#depthbox b{color:var(--red);font-size:1.5em;font-family:var(--serif)}
+#zerowin{color:var(--ink-faint)}
+#zerowin .zw{display:inline-block;width:.85em;height:.85em;border:1px solid var(--ink-faint);border-radius:3px;margin-left:.3em;vertical-align:-.1em;transition:all .3s}
+#zerowin .zw.ok{background:var(--pass);border-color:var(--pass)}
+#miglog{font-family:var(--mono);font-size:.7em;color:var(--ink-faint);margin-top:1.1em;min-height:1.5em}
+#miglog span{color:var(--red);font-weight:600}
+.runbtn{font-family:var(--mono);letter-spacing:.1em;font-size:.8em;background:var(--red);color:#fff;border:none;border-radius:9px;padding:.75em 1.5em;cursor:pointer;margin-top:1.3em;transition:all .2s}
+.runbtn:hover{background:#E23038;transform:translateY(-1px)}
+
+/* state machine */
+.smrow{display:flex;gap:.5em;flex-wrap:wrap;align-items:center;margin-top:.6em}
+.st{border:1px solid var(--line);background:#fff;border-radius:8px;padding:.5em .8em;font-family:var(--mono);font-size:.66em;color:var(--ink-dim);transition:all .3s;box-shadow:0 2px 8px rgba(96,48,16,.05)}
+.st.lit{border-color:var(--red);color:var(--red);background:#FDECEA;box-shadow:0 0 10px rgba(215,30,40,.2)}
+.st.done{border-color:var(--pass);color:var(--pass)}
+.st.complete{background:var(--pass);border-color:var(--pass);color:#fff}
+.st.rbk{border-color:var(--amber)}
+.st.rbk.lit{background:#FFF7E0;color:var(--amber);border-color:var(--amber);box-shadow:0 0 12px rgba(192,138,0,.3)}
+.st.rolledback.lit{background:#8F1418;border-color:#8F1418;color:#fff}
+.st.rbfail{border-color:#333;color:#555}
+.st.revwalk{border-color:var(--fail);color:var(--fail);background:#FDE7E5}
+.smphase{font-family:var(--mono);font-size:.64em;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint);margin-top:1em}
+#smlog{font-family:var(--mono);font-size:.7em;color:var(--ink-faint);margin-top:1.1em;min-height:1.5em}
+#smlog span{color:var(--red);font-weight:600}
+.smbtns{display:flex;gap:.8em;margin-top:1.2em}
+.failbtn{font-family:var(--mono);letter-spacing:.08em;font-size:.78em;background:#fff;color:var(--amber);border:1px solid var(--amber);border-radius:9px;padding:.7em 1.3em;cursor:pointer;transition:all .2s}
+.failbtn:hover{background:#FFF7E0;transform:translateY(-1px)}
+.smfacts{margin-top:1.5em;display:grid;grid-template-columns:repeat(3,1fr);gap:.9em}
+.smfact{border-top:2px solid var(--red);padding-top:.6em;font-size:.78em;color:var(--ink-dim)}
+.smfact b{display:block;color:var(--ink);font-family:var(--mono);font-size:.9em;margin-bottom:.25em}
+
+/* agents */
+.aisplit{display:grid;grid-template-columns:.95fr 1.05fr;gap:1.6em;margin-top:1.4em;align-items:stretch}
+.agcards{display:flex;flex-direction:column;gap:.8em}
+.agcard{border:1px solid var(--line);border-radius:12px;background:#fff;padding:1em 1.2em;box-shadow:0 2px 10px rgba(96,48,16,.05)}
+.agcard h3{font-family:var(--serif);font-size:1.08em;color:var(--red)}
+.agcard p{font-size:.8em;color:var(--ink-dim);margin-top:.25em}
+.console{border:1px solid #3E281E;border-radius:12px;background:#221410;overflow:hidden;display:flex;flex-direction:column;min-height:0}
+.chead{font-family:var(--mono);font-size:.62em;letter-spacing:.16em;color:var(--gold);padding:.8em 1.1em;border-bottom:1px solid #3E281E;background:#2E1B14}
+.clines{padding:.9em 1.1em;font-family:var(--mono);font-size:.7em;line-height:1.85;overflow:hidden;flex:1}
+.cline{opacity:0;transform:translateY(6px);transition:all .4s;color:#D8C6B4}
+.cline.show{opacity:1;transform:none}
+.cline .rolelbl{color:var(--gold)}
+.cline .ok{color:#7CC58F}
+.splitbanner{margin-top:1.3em;border:1px solid var(--line);border-radius:11px;background:var(--panel);padding:.9em 1.2em;font-size:.86em;color:var(--ink-dim)}
+.splitbanner b{color:var(--red)}
+
+/* math */
+.mathsplit{display:grid;grid-template-columns:1fr 1fr;gap:1.4em;margin-top:1.5em}
+.mcard{border:1px solid var(--line);border-radius:14px;background:#fff;padding:1.5em 1.6em;box-shadow:0 2px 12px rgba(96,48,16,.06)}
+.mcard h3{font-family:var(--serif);font-size:1.25em;color:var(--red);margin-bottom:.7em}
+.formula{font-family:var(--serif);font-size:1.5em;background:#8F1418;color:var(--gold);border-radius:10px;padding:.6em 1em;text-align:center;margin-bottom:.9em}
+.mcard p{font-size:.85em;color:var(--ink-dim)}
+.mcard p b{color:var(--ink)}
+.mcard .cite{font-size:.7em;color:var(--ink-faint);margin-top:1em;font-style:italic}
+#drainCalc{font-family:var(--mono);font-size:.8em;margin:.8em 0;padding:.7em .9em;border:1px dashed var(--line);border-radius:9px;color:var(--ink-dim)}
+#drainCalc b{color:var(--red)}
+
+/* results */
+.resgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:1.1em;margin-top:1.8em}
+.rescard{border:1px solid var(--line);border-radius:13px;background:#fff;padding:1.5em 1.4em;box-shadow:0 2px 12px rgba(96,48,16,.06)}
+.rescard .n{font-family:var(--serif);font-size:2.8em;font-weight:700;color:var(--red);line-height:1}
+.rescard .t{font-family:var(--mono);font-size:.66em;letter-spacing:.1em;text-transform:uppercase;color:var(--gold-dim);margin:.5em 0 .4em}
+.rescard p{font-size:.78em;color:var(--ink-dim)}
+
+/* demo */
+.demotabs{display:flex;gap:1em;margin-top:2em}
+.dtab{flex:1;border:1px solid #E4B62E;border-radius:12px;padding:1.3em;text-align:center;background:#fff;box-shadow:0 2px 10px rgba(96,48,16,.05)}
+.dtab b{font-family:var(--serif);font-size:1.2em;color:var(--red);display:block;margin-bottom:.3em}
+.dtab span{font-size:.8em;color:var(--ink-dim)}
+
+/* AI touchpoints strip (scene 6) */
+.aitouch{display:flex;align-items:center;gap:.5em;margin-top:1.2em;flex-wrap:wrap}
+.tp{border:1px solid var(--line);background:#fff;border-radius:20px;padding:.45em 1em;font-family:var(--mono);font-size:.66em;letter-spacing:.08em;color:var(--ink-dim);transition:all .4s;box-shadow:0 2px 8px rgba(96,48,16,.05)}
+.tp.lit{border-color:var(--gold-dim);background:var(--gold);color:#4A3200;font-weight:600;box-shadow:0 0 12px rgba(228,167,0,.3)}
+.tpline{flex:0 0 1.4em;height:1.5px;background:var(--line)}
+.aitouch .tlabel{font-family:var(--mono);font-size:.62em;letter-spacing:.14em;color:var(--ink-faint);margin-right:.4em;text-transform:uppercase}
+
+/* AI dividend showdown (scene 7) */
+.showdown{display:flex;flex-direction:column;gap:1.15em;margin-top:1.5em;max-width:66vw}
+.divrow .dlabel{font-family:var(--serif);font-size:1.02em;color:var(--ink);margin-bottom:.4em}
+.dtrack{display:flex;align-items:center;gap:.9em;margin-top:.3em}
+.dwho{font-family:var(--mono);font-size:.62em;letter-spacing:.1em;color:var(--ink-faint);width:5em;flex:none;text-transform:uppercase}
+.dbarwrap{flex:1;height:14px;border-radius:7px;background:#EFE6D8;overflow:hidden}
+.dbar{height:100%;border-radius:7px;width:0;transition:width 1.3s cubic-bezier(.2,.7,.2,1)}
+.dbar.manual{background:var(--red)}
+.dbar.ai{background:linear-gradient(90deg,var(--gold),#E4A700);transition-duration:.5s}
+.dval{font-family:var(--mono);font-size:.7em;width:16em;flex:none;color:var(--ink-dim);opacity:0;transition:opacity .5s}
+.dval.show{opacity:1}
+.dval b{color:var(--red)} .dval.aiv b{color:var(--gold-dim)}
+.compound{margin-top:1.5em;border:1px solid #E4B62E;border-radius:14px;background:linear-gradient(120deg,#8F1418,#701014);color:#FFF8EC;padding:1.3em 1.6em;display:flex;align-items:center;gap:2em;box-shadow:0 4px 18px rgba(120,20,20,.25);max-width:66vw}
+.compound .big{font-family:var(--serif);font-size:2.6em;font-weight:700;color:var(--gold);line-height:1;white-space:nowrap}
+.compound .big small{font-size:.42em;font-family:var(--mono);color:#F3D9A0;font-weight:400;letter-spacing:.1em;display:block;margin-top:.3em}
+.compound p{font-size:.9em;color:#FFE9C9}
+.compound p b{color:var(--gold)}
+.costline{margin-top:1em;font-family:var(--mono);font-size:.72em;color:var(--ink-faint)}
+.costline b{color:var(--gold-dim)}
+
+/* compact showdown grid (time dividend) */
+.sdgrid{display:grid;grid-template-columns:1fr 1fr;gap:1em;margin-top:1.3em}
+.sdcard{border:1px solid var(--line);border-radius:13px;background:#fff;padding:1em 1.2em;box-shadow:0 2px 12px rgba(96,48,16,.06)}
+.sdcard h3{font-family:var(--serif);font-size:.98em;color:var(--ink);margin-bottom:.7em;font-weight:600}
+.sdcard h3 .pt{font-family:var(--mono);font-size:.62em;color:var(--gold-dim);font-weight:400;letter-spacing:.08em;margin-left:.4em}
+.sdcard .dtrack{gap:.7em;margin-top:.45em}
+.sdcard .dwho{width:4.2em;font-size:.58em}
+.sdcard .dbarwrap{height:10px}
+.sdcard .dval{width:auto;flex:none;font-size:.62em;max-width:12em;line-height:1.35}
+
+/* program dividend pillars */
+.pillars{display:grid;grid-template-columns:repeat(4,1fr);gap:1em;margin-top:1.4em}
+.pillar{border:1px solid var(--line);border-radius:13px;background:#fff;padding:1.15em 1.2em;box-shadow:0 2px 12px rgba(96,48,16,.06);border-top:3px solid var(--gold)}
+.pillar .ptag{font-family:var(--mono);font-size:.6em;letter-spacing:.2em;color:var(--gold-dim);text-transform:uppercase}
+.pillar .pnum{font-family:var(--serif);font-size:1.35em;font-weight:700;color:var(--red);margin:.35em 0 .4em;line-height:1.15}
+.pillar p{font-size:.76em;color:var(--ink-dim)}
+.pillar p b{color:var(--ink)}
+.foreverstrip{margin-top:1.3em;border:1px solid var(--line);border-radius:11px;background:var(--panel);padding:.85em 1.2em;font-size:.84em;color:var(--ink-dim)}
+.foreverstrip b{color:var(--red)}
+
+@media (prefers-reduced-motion: reduce){
+  *{transition-duration:.01ms!important;animation-duration:.01ms!important}
+}
+</style>
+</head>
+<body>
+<div id="brand"><b>INTELLIAI 2.0</b> · IBM MQ INTELLIGENT HACKATHON 2026 · PART 2</div>
+<div id="scenetag">1 / 9</div>
+<div id="hint">← → to navigate</div>
+<div id="rail"></div>
+<div id="deck">
+
+<!-- SCENE 0 · HERO -->
+<section class="scene active" id="hero">
+  <canvas id="heroCanvas"></canvas>
+  <div class="fg stagger">
+    <div class="eyebrow">Team intelliAI2DotO · Part 2</div>
+    <h1>IntelliAI 2.0</h1>
+    <p class="sub" style="font-size:1.15em">The MQ Migration Control Plane.<br>Part 1 designed the target. This executes it — live, one app at a time, with zero message loss.</p>
+    <div class="stats stagger">
+      <div class="statchip"><div class="n">16</div><div class="l">MQ 9.4.5 QMs</div></div>
+      <div class="statchip"><div class="n">7</div><div class="l">apps migrated</div></div>
+      <div class="statchip"><div class="n">12</div><div class="l">state machine</div></div>
+      <div class="statchip"><div class="n">0</div><div class="l">messages lost</div></div>
+    </div>
+  </div>
+  <div id="lossTag">live cutover · messages lost: <b id="lostN">0</b></div>
+</section>
+
+<!-- SCENE 1 · PROBLEM -->
+<section class="scene">
+  <div class="eyebrow">The problem</div>
+  <h2>Migrating a live MQ estate means holding<br>four guarantees true — simultaneously.</h2>
+  <div class="grid2x2 stagger">
+    <div class="pcard"><h3>No message loss</h3><p>Every in-flight message must be delivered — <b>none stranded on the old queue, none duplicated</b> on the new one.</p></div>
+    <div class="pcard"><h3>No application change</h3><p>Producers and consumers can't change connection strings or restart. <b>They must not even notice.</b></p></div>
+    <div class="pcard"><h3>No collateral impact</h3><p>Migrating one app off a shared QM <b>must not disturb the co-tenant apps</b> still running on it.</p></div>
+    <div class="pcard"><h3>Full auditability</h3><p>Every change <b>recorded, causally ordered, and reversible</b> — so it survives a real internal audit.</p></div>
+  </div>
+  <p class="sub small" style="margin-top:1.3em">Any one is easy. Any two are manageable. IntelliAI 2.0 is the control plane that holds all four at once — on a running estate.</p>
+</section>
+
+<!-- SCENE 2 · ARCHITECTURE -->
+<section class="scene" id="archscene">
+  <div class="eyebrow">The solution</div>
+  <h2>One control plane. One chokepoint to MQ.</h2>
+  <div class="stack stagger">
+    <div class="tier ui"><h3>UI Control Plane</h3><p>Next.js dashboard. Talks ONLY to the BCL. Holds no MQ credentials, issues no MQSC.</p></div>
+    <div class="downarrow">▼</div>
+    <div class="tier bcl"><h3>Business Control Layer (BCL)</h3><p>FastAPI service — the sole point of contact with MQ + OpenShift. Deterministic engines · 3 advisory AI agents · Lamport-clocked audit log.</p></div>
+    <div class="downarrow">▼</div>
+    <div class="tier mq"><h3>OpenShift · IBM MQ 9.4.5</h3><p>16 real QM pods — 9 shared sources, 7 dedicated targets. BCL applies MQSC via oc exec.</p></div>
+    <div id="noPath"><div class="npline"></div><div class="nplbl">✗ NO PATH<br>UI can never<br>reach MQ</div></div>
+  </div>
+  <div class="chokefact"><b>The dependency direction is strict.</b> Because there is exactly one path to MQ, there is exactly one place to validate, sequence, and record every single change.</div>
+</section>
+
+<!-- SCENE 3 · FIVE STEPS -->
+<section class="scene" id="stepscene">
+  <div class="eyebrow">The mechanism</div>
+  <h2>How one app migrates — watch the cutover happen.</h2>
+  <div class="steps stagger">
+    <div class="stp" data-s="1">1 · PROVISION TARGET</div><span class="sarrow">▸</span>
+    <div class="stp" data-s="2">2 · BUILD THE BRIDGE</div><span class="sarrow">▸</span>
+    <div class="stp" data-s="3">3 · REWIRE (CUTOVER)</div><span class="sarrow">▸</span>
+    <div class="stp" data-s="4">4 · DRAIN THE SOURCE</div><span class="sarrow">▸</span>
+    <div class="stp" data-s="5">5 · VALIDATE &amp; FINALIZE</div>
+  </div>
+  <div id="flowviz">
+    <div class="fvrow">
+      <div class="fvnode app">APP<small>producer · never touched</small></div>
+      <div class="fvlink" id="linkA"><div class="mdot" id="dot1"></div><div class="mdot" id="dot2"></div></div>
+      <div class="fvnode src" id="srcnode"><span id="qlabel">ORDERS.Q — QLOCAL</span><small>QM_SHARED_2 (source)</small></div>
+      <div class="fvlink bridge" id="linkB"><div class="mdot" id="dot3"></div></div>
+      <div class="fvnode tgt" id="tgtnode">ORDERS.Q — QLOCAL<small>QM_ORDERS (dedicated target)</small></div>
+    </div>
+    <div id="depthbox">
+      <div>source depth: <b id="depthN">1,240</b></div>
+      <div id="zerowin">zero-window (depth=0 · ipprocs=0 · opprocs=0):
+        <span class="zw" id="z1"></span><span class="zw" id="z2"></span><span class="zw" id="z3"></span>
+      </div>
+    </div>
+  </div>
+  <div id="miglog">&nbsp;</div>
+  <button class="runbtn" id="runMig">▶ RUN THE MIGRATION</button>
+</section>
+
+<!-- SCENE 4 · STATE MACHINE -->
+<section class="scene" id="smscene">
+  <div class="eyebrow">The discipline</div>
+  <h2>An explicit 12-state machine — not a script.</h2>
+  <div class="smphase">Forward path</div>
+  <div class="smrow stagger">
+    <div class="st" data-st="PLANNED">PLANNED</div><span class="sarrow">▸</span>
+    <div class="st" data-st="PROVISIONING">PROVISIONING</div><span class="sarrow">▸</span>
+    <div class="st" data-st="VALIDATING_PRE">VALIDATING_PRE</div><span class="sarrow">▸</span>
+    <div class="st" data-st="REWIRING">REWIRING</div><span class="sarrow">▸</span>
+    <div class="st" data-st="DRAIN_WAIT">DRAIN_WAIT</div><span class="sarrow">▸</span>
+    <div class="st" data-st="VALIDATING_DURING">VALIDATING_DURING</div><span class="sarrow">▸</span>
+    <div class="st" data-st="DRAINING">DRAINING</div><span class="sarrow">▸</span>
+    <div class="st" data-st="VALIDATING_POST">VALIDATING_POST</div><span class="sarrow">▸</span>
+    <div class="st" data-st="COMPLETED">COMPLETED</div>
+  </div>
+  <div class="smphase">Failure path — half the machine, not an afterthought</div>
+  <div class="smrow stagger">
+    <div class="st rbk" data-st="ROLLING_BACK">ROLLING_BACK · any forward state can fail into here</div>
+    <div class="st rolledback" data-st="ROLLED_BACK">ROLLED_BACK · source restored</div>
+    <div class="st rbfail" data-st="ROLLBACK_FAILED">ROLLBACK_FAILED · terminal · human required</div>
+  </div>
+  <div id="smlog">&nbsp;</div>
+  <div class="smbtns">
+    <button class="runbtn" id="runSM" style="margin-top:0">▶ RUN HAPPY PATH</button>
+    <button class="failbtn" id="injFail">⚡ INJECT FAILURE MID-MIGRATION</button>
+  </div>
+  <div class="smfacts stagger">
+    <div class="smfact"><b>assert_transition</b>One chokepoint validates every state change — an out-of-order transition is structurally impossible.</div>
+    <div class="smfact"><b>Pure, unit-testable module</b>The transition rules do no I/O — the machine is tested and reasoned about independently of the engine.</div>
+    <div class="smfact"><b>TLA+ discipline</b>The valid-edge predicate is the executable mirror of a TLA+ Next relation (Lamport, <i>Specifying Systems</i>). We use the discipline; model-checking is roadmap.</div>
+  </div>
+</section>
+
+<!-- SCENE 5 · AGENTS -->
+<section class="scene" id="agscene">
+  <div class="eyebrow">The AI core</div>
+  <h2>The AI is the brain of the control plane.<br>It decides the <span class="k">what</span>; the engine guarantees the <span class="k">how</span>.</h2>
+  <div class="aitouch" id="aitouch">
+    <span class="tlabel">AI across the lifecycle:</span>
+    <div class="tp">PLANS</div><div class="tpline"></div>
+    <div class="tp">RISK-GATES</div><div class="tpline"></div>
+    <div class="tp">PREDICTS</div><div class="tpline"></div>
+    <div class="tp">EXPLAINS</div><div class="tpline"></div>
+    <div class="tp">DIAGNOSES</div>
+  </div>
+  <div class="aisplit">
+    <div class="agcards stagger">
+      <div class="agcard"><h3>Migration Planner + Risk Auditor</h3><p>Gemini writes the plan the engine executes — the step sequence, the bridge and XMITQ naming, the ordering rationale — and risk-scores it before the approval gate. Days of senior MQ engineering, generated in seconds.</p></div>
+      <div class="agcard"><h3>Operator Assistant</h3><p>Turns operations into a conversation — live drain estimates, audit queries, migration status — answered from real state in seconds instead of log-trawling sessions.</p></div>
+      <div class="agcard"><h3>RCA Assistant</h3><p>Reads a failed migration’s Lamport trail, names the exact MQ reason code, and delivers a structured diagnosis with next checks — collapsing MTTR from hours of triage to seconds.</p></div>
+    </div>
+    <div class="console">
+      <div class="chead">◉ GEMINI 2.5 PRO · TACHYON · ADVISORY STREAM</div>
+      <div class="clines" id="agLines"></div>
+    </div>
+  </div>
+  <div class="splitbanner"><b>The AI plans, sequences, risk-gates, predicts, and diagnoses. The deterministic engine executes with guarantees. The audit log records both.</b> Every AI call is itself audited — an agent_invocations table with per-invocation tool budgets and rate limits — so the intelligence sits inside the audit perimeter, not beside it. That pairing is what makes the system both intelligent and bankable.</div>
+</section>
+
+<!-- SCENE 6 · MATH -->
+<section class="scene" id="mathscene">
+  <div class="eyebrow">The mathematics</div>
+  <h2>Two models — each where it genuinely applies.</h2>
+  <div class="mathsplit stagger">
+    <div class="mcard">
+      <h3>Little's Law — drain prediction</h3>
+      <div class="formula">L = λW &nbsp;→&nbsp; T<sub>drain</sub> ≈ L₀ / μ</div>
+      <div id="drainCalc">depth at cutover L₀ = <b id="L0">1,240</b> msgs · consumer rate μ = <b>95</b>/s → predicted drain <b id="Td">≈ 13s</b></div>
+      <p>Once the producer is rewired away, <b>no new messages arrive</b> — the arrival rate is zero by construction, so the law's condition holds exactly. It <b>predicts</b> the wait for the operator; the engine still <b>proves</b> the drain by polling depth to a confirmed zero.</p>
+      <div class="cite">Little (1961), Operations Research 9(3)</div>
+    </div>
+    <div class="mcard">
+      <h3>Absorbing Markov chain — reliability</h3>
+      <div class="formula">N = (I − Q)⁻¹</div>
+      <p>The state machine <b>is</b> an absorbing chain — COMPLETED, ROLLED_BACK, ROLLBACK_FAILED absorb; the rest are transient. The fundamental matrix gives <b>expected steps to absorption</b> and the <b>probability of each outcome</b>. Shown alongside — never merged with — a separate empirical estimate from the real audit log. <b>Model and measurement, never conflated.</b></p>
+      <div class="cite">Kemeny &amp; Snell (1960), Finite Markov Chains</div>
+    </div>
+  </div>
+</section>
+
+<!-- SCENE 7 · RESULTS -->
+<section class="scene" id="resscene">
+  <div class="eyebrow">Results — run end-to-end on a real MQ fleet</div>
+  <h2>Not a simulation. Real pods, real MQSC, real messages.</h2>
+  <div class="resgrid stagger">
+    <div class="rescard"><div class="n" data-count="16">0</div><div class="t">IBM MQ 9.4.5 QMs</div><p>9 shared sources + 7 dedicated targets, real pods on OpenShift.</p></div>
+    <div class="rescard"><div class="n" data-count="7">0</div><div class="t">apps migrated</div><p>Shared → dedicated, one at a time, each through its own 12-state machine.</p></div>
+    <div class="rescard"><div class="n" data-count="0">0</div><div class="t">messages lost</div><p>Drain proven by polling depth to a confirmed zero on every cutover.</p></div>
+    <div class="rescard"><div class="n" data-count="100" data-suffix="%">0</div><div class="t">reversible</div><p>Every forward step has a clean inverse; per-app rollback verified live.</p></div>
+  </div>
+</section>
+
+<!-- SCENE 8 · TIME DIVIDEND -->
+<section class="scene" id="divscene">
+  <div class="eyebrow">The business case · Part 1 + Part 2 · dividend one</div>
+  <h2>The time dividend — before and after, on the clock.</h2>
+  <div class="sdgrid stagger">
+    <div class="sdcard">
+      <h3>Design the compliant target topology — whole estate<span class="pt">PART 1</span></h3>
+      <div class="dtrack"><span class="dwho">manual</span><div class="dbarwrap"><div class="dbar manual" data-w="100"></div></div><span class="dval"><b>weeks</b> · senior architect, whiteboard</span></div>
+      <div class="dtrack"><span class="dwho">with AI</span><div class="dbarwrap"><div class="dbar ai" data-w="1.5"></div></div><span class="dval aiv"><b>≈ 30 s</b> · validated + ADRs</span></div>
+    </div>
+    <div class="sdcard">
+      <h3>Plan one migration — sequenced, risk-scored<span class="pt">PART 2</span></h3>
+      <div class="dtrack"><span class="dwho">manual</span><div class="dbarwrap"><div class="dbar manual" data-w="100"></div></div><span class="dval"><b>≈ 3 days</b> · senior MQ engineer</span></div>
+      <div class="dtrack"><span class="dwho">with AI</span><div class="dbarwrap"><div class="dbar ai" data-w="2.5"></div></div><span class="dval aiv"><b>≈ 40 s</b> · Gemini via Tachyon</span></div>
+    </div>
+    <div class="sdcard">
+      <h3>Diagnose a failed migration — RCA + reason code<span class="pt">PART 2</span></h3>
+      <div class="dtrack"><span class="dwho">manual</span><div class="dbarwrap"><div class="dbar manual" data-w="100"></div></div><span class="dval"><b>2–4 hrs</b> · war-room log triage</span></div>
+      <div class="dtrack"><span class="dwho">with AI</span><div class="dbarwrap"><div class="dbar ai" data-w="2"></div></div><span class="dval aiv"><b>seconds</b> · reads the Lamport trail</span></div>
+    </div>
+    <div class="sdcard">
+      <h3>Risk records, ADRs, evidence — every change<span class="pt">PART 1 + 2</span></h3>
+      <div class="dtrack"><span class="dwho">manual</span><div class="dbarwrap"><div class="dbar manual" data-w="100"></div></div><span class="dval"><b>often skipped</b> under deadline</span></div>
+      <div class="dtrack"><span class="dwho">with AI</span><div class="dbarwrap"><div class="dbar ai" data-w="4"></div></div><span class="dval aiv"><b>every run</b> · 100% coverage</span></div>
+    </div>
+  </div>
+  <div class="costline">the entire intelligence layer costs <b>~15–25K tokens per migration — cents</b> on internal Tachyon rates · engineer-days replaced for pocket change</div>
+</section>
+
+<!-- SCENE 9 · PROGRAM DIVIDEND -->
+<section class="scene" id="progscene">
+  <div class="eyebrow">The business case · dividend two · what you fund</div>
+  <h2>Compound it across the estate — the program dividend.</h2>
+  <div class="compound" style="max-width:none;margin-top:1.2em">
+    <div class="big"><span id="appN">0</span> apps<small>PART 1'S REAL ESTATE · DESIGNED BY PART 1 · EXECUTED BY PART 2</small></div>
+    <p>The AI is the difference between a <b>multi-year manual program</b> and a <b>scheduled quarter</b> — every migration planned in seconds, gated on proof, and evidenced automatically. <b>The engines make each step safe. The AI makes the whole program feasible.</b></p>
+  </div>
+  <div class="pillars stagger">
+    <div class="pillar"><div class="ptag">Speed</div><div class="pnum">years → a quarter</div><p>End-to-end modernization becomes a <b>scheduled program</b>, not a heroic one — AI planning plus blast-radius-proven parallelism sets the pace.</p></div>
+    <div class="pillar"><div class="ptag">Risk</div><div class="pnum">incidents → states</div><p>Every change validated, reversible, and co-tenant-gated. A failure isn't an outage — it's a <b>ROLLED_BACK state with an instant RCA</b>. MTTR: hours → seconds.</p></div>
+    <div class="pillar"><div class="ptag">Cost</div><div class="pnum">engineer-years → cents</div><p>Design, planning, and diagnosis paid in tokens. Plus the estate itself gets cheaper: <b>53 orphan QMs</b> of licence and infrastructure waste, eliminated by the target design.</p></div>
+    <div class="pillar"><div class="ptag">Compliance</div><div class="pnum">~0 → 100% evidence</div><p><b>PCI isolation designed in</b>, ADRs on every decision, a Lamport-clocked audit trail and an evidence bundle per change — audit-ready by construction.</p></div>
+  </div>
+  <div class="foreverstrip"><b>And it compounds forever:</b> Part 1's Day-2 lifecycle mode keeps the estate optimised as it changes, and Part 2 executes every change with the same proofs — modernise once, stay modern automatically.</div>
+</section>
+
+<!-- SCENE 8 · DEMO -->
+<section class="scene">
+  <div class="eyebrow">Now — the real thing</div>
+  <h2>Watch one app migrate — live.</h2>
+  <p class="sub">Plan → approve → provision → rewire → drain → validate. Then induce a failure, roll back, and read the RCA — all on real MQ.</p>
+  <div class="demotabs stagger">
+    <div class="dtab"><b>Topology</b><span>16 QMs, 7 apps</span></div>
+    <div class="dtab"><b>Migrate</b><span>state machine + audit, live</span></div>
+    <div class="dtab"><b>Wow</b><span>the app never reconnects</span></div>
+    <div class="dtab"><b>Rollback</b><span>chaos → reverse MQSC</span></div>
+  </div>
+  <p class="small" style="margin-top:2.5em;font-family:var(--mono)">Team intelliAI2DotO · IBM MQ Intelligent Hackathon 2026 · Phase 2</p>
+</section>
+
+</div>
+<script>
+(function(){
+const scenes=[...document.querySelectorAll('.scene')];
+const rail=document.getElementById('rail');
+const tag=document.getElementById('scenetag');
+const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+let cur=0;
+scenes.forEach((s,i)=>{const b=document.createElement('button');b.onclick=()=>go(i);rail.appendChild(b)});
+const dots=[...rail.children];
+const entered=new Set();
+function go(i){
+  if(i<0||i>=scenes.length)return;
+  scenes[cur].classList.remove('active');
+  cur=i;
+  scenes.forEach((s,k)=>{s.classList.toggle('past',k<cur)});
+  scenes[cur].classList.add('active');
+  dots.forEach((d,k)=>d.classList.toggle('on',k===cur));
+  tag.textContent=(cur+1)+' / '+scenes.length;
+  document.body.classList.toggle('onhero',cur===0);
+  scenes.forEach(s=>s.classList.remove('in'));
+  requestAnimationFrame(()=>requestAnimationFrame(()=>scenes[cur].classList.add('in')));
+  if(!entered.has(cur)){entered.add(cur);onEnter(cur)}
+  else if(cur===7)counters();
+}
+dots[0].classList.add('on');
+document.body.classList.add('onhero');
+requestAnimationFrame(()=>requestAnimationFrame(()=>scenes[0].classList.add('in')));
+document.addEventListener('keydown',e=>{
+  if(['ArrowRight','PageDown',' '].includes(e.key)){e.preventDefault();go(cur+1)}
+  if(['ArrowLeft','PageUp'].includes(e.key)){e.preventDefault();go(cur-1)}
+  if(e.key==='Home')go(0); if(e.key==='End')go(scenes.length-1);
+});
+let tx=null;
+addEventListener('touchstart',e=>tx=e.touches[0].clientX,{passive:true});
+addEventListener('touchend',e=>{if(tx==null)return;const dx=e.changedTouches[0].clientX-tx;if(Math.abs(dx)>60)go(cur+(dx<0?1:-1));tx=null},{passive:true});
+
+function onEnter(i){
+  if(i===2)setTimeout(()=>document.getElementById('noPath').classList.add('show'),1300);
+  if(i===3)setTimeout(runMigration,1400);
+  if(i===4)setTimeout(runHappy,1400);
+  if(i===5){agStream();touchSeq()}
+  if(i===8)dividendAnim();
+  if(i===9)progAnim();
+  if(i===6)drainCalc();
+  if(i===7)counters();
+}
+function counters(){
+  document.querySelectorAll('[data-count]').forEach(el=>{
+    const target=parseFloat(el.dataset.count),suf=el.dataset.suffix||'';
+    if(reduced){el.textContent=target+suf;return}
+    const t0=performance.now(),dur=1100;
+    function tick(t){const p=Math.min(1,(t-t0)/dur),e=1-Math.pow(1-p,3);
+      el.textContent=Math.round(target*e)+suf; if(p<1)requestAnimationFrame(tick)}
+    requestAnimationFrame(tick);
+  });
+}
+
+/* ---- hero canvas: live cutover message flow ---- */
+const cv=document.getElementById('heroCanvas'),ctx=cv.getContext('2d');
+function fit(){cv.width=innerWidth*devicePixelRatio;cv.height=innerHeight*devicePixelRatio;ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0)}
+fit();addEventListener('resize',fit);
+const NODES={app:{x:.50,y:.62,l:'APP'},src:{x:.70,y:.36,l:'QM_SHARED'},tgt:{x:.90,y:.60,l:'QM_DEDICATED'}};
+let msgs=[],lastSpawn=0,t0=performance.now(),lost=0;
+const CYCLE=12000; // 0-5s before · 5s cutover pulse · 5-11s after · reset
+function P(n){return {x:NODES[n].x*innerWidth,y:NODES[n].y*innerHeight}}
+function heroTick(now){
+  const el=(now-t0)%CYCLE;
+  const after=el>5000;
+  // spawn
+  if(now-lastSpawn>380){lastSpawn=now;msgs.push({t:0,path:after?['app','src','tgt']:['app','src']})}
+  ctx.clearRect(0,0,innerWidth,innerHeight);
+  // links
+  function line(a,b,solid,alpha){const A=P(a),B=P(b);ctx.beginPath();ctx.moveTo(A.x,A.y);ctx.lineTo(B.x,B.y);
+    ctx.setLineDash(solid?[]:[6,6]);ctx.strokeStyle='rgba(255,205,65,'+alpha+')';ctx.lineWidth=1.6;ctx.stroke();ctx.setLineDash([])}
+  line('app','src',true,.75);
+  line('src','tgt',after,after?.85:.28);
+  // cutover pulse at src
+  if(el>4600&&el<5600){const p=(el-4600)/1000,S=P('src');ctx.beginPath();ctx.arc(S.x,S.y,10+p*36,0,7);
+    ctx.strokeStyle='rgba(255,255,255,'+(0.7*(1-p))+')';ctx.lineWidth=2;ctx.stroke()}
+  // messages
+  msgs=msgs.filter(m=>m.t<m.path.length-1+0.999);
+  msgs.forEach(m=>{
+    m.t+=0.011;
+    const seg=Math.min(Math.floor(m.t),m.path.length-2),f=m.t-seg;
+    const A=P(m.path[seg]),B=P(m.path[seg+1]);
+    const x=A.x+(B.x-A.x)*f,y=A.y+(B.y-A.y)*f;
+    ctx.beginPath();ctx.arc(x,y,3.4,0,7);ctx.fillStyle='#FFCD41';ctx.shadowColor='rgba(255,205,65,.8)';ctx.shadowBlur=8;ctx.fill();ctx.shadowBlur=0;
+  });
+  // nodes
+  Object.keys(NODES).forEach(k=>{
+    const p=P(k),dim=(k==='tgt'&&!after);
+    ctx.beginPath();ctx.arc(p.x,p.y,7,0,7);
+    ctx.fillStyle=dim?'rgba(255,248,236,.35)':(k==='app'?'#FFF8EC':'#FFCD41');ctx.fill();
+    ctx.font='600 11px IBM Plex Mono,monospace';ctx.fillStyle=dim?'rgba(255,240,214,.45)':'rgba(255,240,214,.9)';
+    ctx.fillText(NODES[k].l,p.x-28,p.y+24);
+  });
+  // phase label
+  ctx.font='11px IBM Plex Mono,monospace';ctx.fillStyle='rgba(255,240,214,.7)';
+  ctx.fillText(after?'after — QREMOTE alias · MQ routes over the bridge':'before — QLOCAL on shared QM',innerWidth*.5,innerHeight*.82);
+  requestAnimationFrame(heroTick);
+}
+if(!reduced)requestAnimationFrame(heroTick);
+
+/* ---- five-step migration ---- */
+const S=n=>document.querySelector('.stp[data-s="'+n+'"]');
+const mlog=document.getElementById('miglog');
+let migRunning=false;
+function runMigration(){
+  if(migRunning)return;migRunning=true;
+  document.getElementById('runMig').textContent='\u21bb REPLAY THE MIGRATION';
+  // reset
+  [1,2,3,4,5].forEach(n=>S(n).classList.remove('lit','done'));
+  const tgt=document.getElementById('tgtnode'),lb=document.getElementById('linkB'),ql=document.getElementById('qlabel'),src=document.getElementById('srcnode');
+  tgt.classList.remove('up');lb.classList.remove('up');ql.classList.remove('alias');src.classList.remove('fade');
+  ql.textContent='ORDERS.Q \u2014 QLOCAL';
+  ['z1','z2','z3'].forEach(id=>document.getElementById(id).classList.remove('ok'));
+  const dN=document.getElementById('depthN');dN.textContent='1,240';
+  flowDots(true,false);
+  const seq=[
+    [0,()=>{S(1).classList.add('lit');mlog.innerHTML='PROVISION \u2014 QM_ORDERS pod deployed on OpenShift \u00b7 DLQ, channels, queues realized via MQSC'}],
+    [1600,()=>{S(1).classList.replace('lit','done');S(2).classList.add('lit');lb.classList.add('up');tgt.classList.add('up');
+      mlog.innerHTML='BRIDGE \u2014 XMITQ + sender channel on source, matching receiver on target \u00b7 a path from S to T'}],
+    [3200,()=>{S(2).classList.replace('lit','done');S(3).classList.add('lit');ql.classList.add('alias');ql.textContent='ORDERS.Q \u2014 QREMOTE alias';
+      mlog.innerHTML='CUTOVER \u2014 <span>same name, same connection</span> \u00b7 MQ now routes every PUT over the bridge \u00b7 the app never notices';flowDots(true,true)}],
+    [5200,()=>{S(3).classList.replace('lit','done');S(4).classList.add('lit');
+      mlog.innerHTML='DRAIN \u2014 no new arrivals \u00b7 polling source depth to a confirmed zero\u2026';drainDown()}],
+    [8600,()=>{S(4).classList.replace('lit','done');S(5).classList.add('lit');src.classList.add('fade');
+      mlog.innerHTML='VALIDATE \u2014 end-to-end path confirmed \u00b7 empty source queues removed \u00b7 <span>the app owns a dedicated QM</span>'}],
+    [10100,()=>{S(5).classList.replace('lit','done');migRunning=false}]
+  ];
+  seq.forEach(([d,f])=>setTimeout(f,d));
+}
+function drainDown(){
+  const dN=document.getElementById('depthN');let v=1240;
+  const iv=setInterval(()=>{
+    v=Math.max(0,Math.floor(v-137-Math.random()*60));
+    dN.textContent=v.toLocaleString();
+    if(v===0){clearInterval(iv);
+      ['z1','z2','z3'].forEach((id,i)=>setTimeout(()=>document.getElementById(id).classList.add('ok'),300+i*420));}
+  },260);
+}
+let dotTimers=[];
+function flowDots(run,viaBridge){
+  dotTimers.forEach(clearInterval);dotTimers=[];
+  const d1=document.getElementById('dot1'),d2=document.getElementById('dot2'),d3=document.getElementById('dot3');
+  [d1,d2,d3].forEach(d=>d.style.opacity=0);
+  if(!run||reduced)return;
+  function animate(dot,delay){
+    let t=-delay;
+    const iv=setInterval(()=>{t+=0.05;if(t<0)return;const f=t%1;dot.style.opacity=1;dot.style.left=(f*100)+'%';},50);
+    dotTimers.push(iv);
+  }
+  animate(d1,0);animate(d2,0.5);
+  if(viaBridge)animate(d3,0.25);else d3.style.opacity=0;
+}
+
+/* ---- state machine ---- */
+const FWD=['PLANNED','PROVISIONING','VALIDATING_PRE','REWIRING','DRAIN_WAIT','VALIDATING_DURING','DRAINING','VALIDATING_POST','COMPLETED'];
+const ST=n=>document.querySelector('.st[data-st="'+n+'"]');
+const smlog=document.getElementById('smlog');
+let smBusy=false,smTimers=[];
+function smReset(){smTimers.forEach(clearTimeout);smTimers=[];
+  document.querySelectorAll('#smscene .st').forEach(s=>s.classList.remove('lit','done','complete','revwalk'))}
+function sq(fn,d){smTimers.push(setTimeout(fn,d))}
+function runHappy(){
+  if(smBusy)return;smBusy=true;smReset();
+  FWD.forEach((n,i)=>{
+    sq(()=>{if(i>0)ST(FWD[i-1]).classList.replace('lit','done');
+      ST(n).classList.add(n==='COMPLETED'?'complete':'lit');
+      smlog.innerHTML=n+' \u2014 transition validated by <span>assert_transition</span> \u00b7 Lamport-clocked audit row written';
+      if(n==='COMPLETED'){smlog.innerHTML='<span>COMPLETED</span> \u2014 every transition audited \u00b7 the app owns its dedicated QM';smBusy=false}
+    },i*520);
+  });
+}
+function injectFailure(){
+  if(smBusy){smTimers.forEach(clearTimeout);smTimers=[]}
+  smBusy=true;smReset();
+  const upto=4; // fail during DRAIN_WAIT
+  for(let i=0;i<=upto;i++){
+    sq(()=>{if(i>0)ST(FWD[i-1]).classList.replace('lit','done');ST(FWD[i]).classList.add('lit');
+      smlog.innerHTML=FWD[i]+' \u2014 forward path running\u2026'},i*450);
+  }
+  sq(()=>{ST(FWD[upto]).classList.remove('lit');ST(FWD[upto]).classList.add('revwalk');
+    smlog.innerHTML='<span style="color:var(--fail)">FAILURE</span> \u2014 target QM unreachable during '+FWD[upto]+' \u00b7 engine detects at the transition'},upto*450+700);
+  sq(()=>{ST('ROLLING_BACK').classList.add('lit');
+    smlog.innerHTML='ROLLING_BACK \u2014 reading THIS app\u2019s audit entries \u00b7 walking them in <span>reverse Lamport order</span> \u00b7 applying the inverse MQSC of each completed step'},upto*450+1500);
+  // reverse walk highlight
+  for(let i=upto;i>=1;i--){
+    sq(()=>{ST(FWD[i]).classList.remove('done','revwalk');ST(FWD[i]).classList.add('revwalk');
+      sq(()=>ST(FWD[i]).classList.remove('revwalk'),380)},upto*450+2100+(upto-i)*430);
+  }
+  sq(()=>{ST('ROLLING_BACK').classList.remove('lit');ST('ROLLED_BACK').classList.add('lit');
+    smlog.innerHTML='<span>ROLLED_BACK</span> \u2014 source restored, bridge removed \u00b7 app fully operational on its original QM \u00b7 completed &amp; planned apps never touched \u00b7 RCA agent has the reason code';
+    smBusy=false},upto*450+2100+upto*430+600);
+}
+document.getElementById('runSM').addEventListener('click',runHappy);
+document.getElementById('injFail').addEventListener('click',injectFailure);
+
+/* ---- agents advisory stream ---- */
+const AGL=[
+ ["MIGRATION PLANNER","plan for APP_ORDERS: 5 steps \u00b7 bridge QM_SHARED_2.QM_ORDERS \u00b7 XMITQ XQ.QM_ORDERS \u00b7 risk: co-tenant APP_BILLING on source \u2014 blast-radius check required","advised"],
+ ["MIGRATION PLANNER","ordering rationale: provision before bridge \u2014 receiver channel must exist before sender starts","advised"],
+ ["OPERATOR ASSISTANT","\u201cwhy is APP_PAY still in DRAIN_WAIT?\u201d \u2192 source depth 312, \u03bc\u224888/s \u2192 predicted \u22484s remaining \u00b7 read from audit + live depth","answered"],
+ ["RCA ASSISTANT","migration #5 failed \u2192 reason code 2059 MQRC_Q_MGR_NOT_AVAILABLE at VALIDATING_DURING \u00b7 target pod restart detected \u00b7 suggested checks: pod events, channel status","diagnosed"],
+ ["OPERATOR ASSISTANT","\u201cwhat changed on QM_SHARED_2 today?\u201d \u2192 4 audit entries, Lamport 118\u2013121 \u00b7 all by bcl-system \u00b7 zero co-tenant objects touched","answered"],
+ ["MIGRATION PLANNER","note: all three roles are read-only \u2014 every state change is executed by the deterministic engines","advised"]
+];
+let agRan=false;
+function agStream(){
+  if(agRan)return;agRan=true;
+  const box=document.getElementById('agLines');
+  AGL.forEach((l,i)=>{setTimeout(()=>{
+    const d=document.createElement('div');d.className='cline';
+    d.innerHTML='<span class="rolelbl">['+l[0]+']</span> '+l[1]+' <span class="ok">\u2713 '+l[2]+'</span>';
+    box.appendChild(d);
+    requestAnimationFrame(()=>requestAnimationFrame(()=>d.classList.add('show')));
+    if(box.children.length>6)box.removeChild(box.firstChild);
+  },700+i*1400)});
+}
+document.getElementById('agscene').addEventListener('click',e=>{
+  if(e.target.closest('.console')){agRan=false;document.getElementById('agLines').innerHTML='';agStream()}
+});
+
+/* ---- AI touchpoints ---- */
+function touchSeq(){
+  document.querySelectorAll('#aitouch .tp').forEach((t,i)=>setTimeout(()=>t.classList.add('lit'),500+i*350));
+}
+/* ---- AI dividend showdown ---- */
+let divRan=false;
+function dividendAnim(){
+  if(divRan)return;divRan=true;
+  document.querySelectorAll('#divscene .sdcard').forEach((row,r)=>{
+    const bars=row.querySelectorAll('.dbar'),vals=row.querySelectorAll('.dval');
+    setTimeout(()=>{bars[0].style.width=bars[0].dataset.w+'%';setTimeout(()=>vals[0].classList.add('show'),850)},500+r*550);
+    setTimeout(()=>{bars[1].style.width=bars[1].dataset.w+'%';setTimeout(()=>vals[1].classList.add('show'),320)},1400+r*550);
+  });
+}
+let progRan=false;
+function progAnim(){
+  if(progRan)return;progRan=true;
+  const el=document.getElementById('appN');
+  if(reduced){el.textContent='438';return}
+  setTimeout(()=>{const t0=performance.now();
+    function tick(t){const p=Math.min(1,(t-t0)/1500),e=1-Math.pow(1-p,3);
+      el.textContent=Math.round(438*e);if(p<1)requestAnimationFrame(tick)}
+    requestAnimationFrame(tick)},500);
+}
+
+/* ---- drain calc animation ---- */
+function drainCalc(){
+  if(reduced)return;
+  const L0=document.getElementById('L0'),Td=document.getElementById('Td');
+  let v=0;const t0=performance.now();
+  function tick(t){const p=Math.min(1,(t-t0)/900),e=1-Math.pow(1-p,3);
+    L0.textContent=Math.round(1240*e).toLocaleString();
+    if(p<1)requestAnimationFrame(tick);else Td.textContent='\u2248 13s'}
+  Td.textContent='\u2026';requestAnimationFrame(tick);
+}
+document.getElementById('runMig').addEventListener('click',runMigration);
+})();
+</script>
+</body>
+</html>
